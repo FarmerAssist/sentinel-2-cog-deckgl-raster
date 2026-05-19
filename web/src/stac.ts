@@ -24,8 +24,16 @@ const CORS_OK_HOSTS = new Set(["data.source.coop"]);
 export type PartialSTACItem = {
   id: string;
   bbox: [number, number, number, number];
-  assets: { visual: { href: string } };
+  assets: {
+    visual: { href: string };
+    B02: { href: string };
+    B03: { href: string };
+    B04: { href: string };
+    B08: { href: string };
+  };
 };
+
+const REQUIRED_BANDS = ["B02", "B03", "B04", "B08"] as const;
 
 type StacFeature = {
   id: string;
@@ -85,10 +93,27 @@ export async function fetchStacItems(opts: FetchOptions): Promise<PartialSTACIte
         rejectedHosts.set(host, (rejectedHosts.get(host) ?? 0) + 1);
         continue;
       }
+      const bandAssets: Record<string, { href: string }> = {};
+      let missingBand = false;
+      for (const b of REQUIRED_BANDS) {
+        const a = feat.assets[b];
+        if (!a?.href) {
+          missingBand = true;
+          break;
+        }
+        bandAssets[b] = { href: a.href };
+      }
+      if (missingBand) continue;
       items.push({
         id: feat.id,
         bbox: feat.bbox,
-        assets: { visual: { href: visual.href } },
+        assets: {
+          visual: { href: visual.href },
+          B02: bandAssets.B02,
+          B03: bandAssets.B03,
+          B04: bandAssets.B04,
+          B08: bandAssets.B08,
+        },
       });
       if (items.length >= maxItems) break;
     }
