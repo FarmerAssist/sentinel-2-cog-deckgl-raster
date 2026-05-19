@@ -1,0 +1,79 @@
+/**
+ * Runtime STAC client for Earth Genome's Sentinel-2 Temporal Mosaics
+ * collection at stac.earthgenome.org. Pages through /search and returns the
+ * minimal shape MosaicLayer needs: bbox + the TCI (true-color) asset href.
+ *
+ * No SAS signing, no token expiry — source.coop is a public CloudFront-fronted
+ * S3 bucket with permissive CORS. The STAC API itself is also CORS-open.
+ */
+
+const STAC_ROOT = "https://stac.earthgenome.org";
+const COLLECTION = "sentinel2-temporal-mosaics";
+
+export type PartialSTACItem = {
+  id: string;
+  bbox: [number, number, number, number];
+  assets: { visual: { href: string } };
+};
+
+type StacFeature = {
+  id: string;
+  bbox: [number, number, number, number];
+  assets: Record<string, { href: string; roles?: string[] }>;
+  properties?: { datetime?: string; "good_pxl_pct"?: number };
+};
+
+type StacFeatureCollection = {
+  features: StacFeature[];
+  links?: { rel: string; href: string }[];
+};
+
+export type FetchOptions = {
+  /** Datetime interval in RFC3339, e.g. "2024-01-01T00:00:00Z/2024-12-31T23:59:59Z" */
+  datetime: string;
+  /** Optional bbox [W,S,E,N] — omit for global */
+  bbox?: [number, number, number, number];
+  /** Hard cap on items fetched (safety net) */
+  maxItems?: number;
+  signal?: AbortSignal;
+};
+
+/**
+ * Page through STAC search and project each item down to {id, bbox, visual asset}.
+ * TCI is the pre-composed RGB visualization band on this collection.
+ */
+export async function fetchStacItems(opts: FetchOptions): Promise<PartialSTACItem[]> {
+  const { datetime, bbox, maxItems = 5000, signal } = opts;
+  const items: PartialSTACItem[] = [];
+
+  const params = new URLSearchParams({
+    collections: COLLECTION,
+    datetime,
+    limit: "200",
+  });
+  if (bbox) params.set("bbox", bbox.join(","));
+
+  let url: string | null = `${STAC_ROOT}/search?${params.toString()}`;
+
+  while (url && items.length < maxItems) {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(`STAC search failed: ${res.status} ${res.statusText}`);
+    const fc = (await res.json()) as StacFeatureCollection;
+
+    for (const feat of fc.features) {
+      const visual = feat.assets["TCI"] ?? feat.assets["visual"];
+      if (!visual?.href) continue;
+      items.push({
+        id: feat.id,
+        bbox: feat.bbox,
+        assets: { visual: { href: visual.href } },
+      });
+      if (items.length >= maxItems) break;
+    }
+
+    const next = fc.links?.find((l) => l.rel === "next");
+    url = next?.href ?? null;
+  }
+
+  return items;
+}
