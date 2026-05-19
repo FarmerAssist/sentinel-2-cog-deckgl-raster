@@ -9,8 +9,6 @@ wheels/
 # Virtual environments
 .venv
 
-# Claude
-.claude/memory/
 .ipynb_checkpoints/
 # Generated STAC (refresh via gen_stac.py)
 web/src/minimal_stac.json

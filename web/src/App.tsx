@@ -20,7 +20,7 @@ import { fetchStacItems, type PartialSTACItem } from "./stac";
 
 const STAC_DATETIME = "2024-01-01T00:00:00Z/2024-12-31T23:59:59Z";
 const STAC_YEAR = 2024;
-const STAC_BBOX: [number, number, number, number] = [95.0, 0.0, 115.0, 25.0];
+const STAC_BBOX: [number, number, number, number] = [1.5, 49.5, 8.5, 54.5];
 
 const geotiffCache = new Map<string, Promise<GeoTIFF>>();
 
@@ -136,9 +136,9 @@ export default function App() {
   }, [stacItems, labelBeforeId]);
 
   const initialViewState = {
-    longitude: 106,
-    latitude: 14,
-    zoom: 4,
+    longitude: 5.3,
+    latitude: 52.1,
+    zoom: 6.5,
     pitch: 0,
     bearing: 0,
   };
