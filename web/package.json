@@ -9,12 +9,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@chunkd/middleware": "^11.3.0",
+    "@chunkd/source": "^11.4.0",
+    "@chunkd/source-http": "^11.4.0",
     "@deck.gl/core": "^9.3.2",
     "@deck.gl/layers": "^9.3.2",
     "@deck.gl/mapbox": "^9.3.2",
     "@developmentseed/deck.gl-geotiff": "^0.7.0",
     "@developmentseed/deck.gl-raster": "^0.7.0",
     "@developmentseed/geotiff": "^0.7.0",
+    "@developmentseed/proj": "^0.7.0",
     "@luma.gl/core": "^9.3.2",
     "@luma.gl/shadertools": "^9.3.2",
     "maplibre-gl": "^5.0.0",

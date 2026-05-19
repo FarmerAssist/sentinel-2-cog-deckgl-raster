@@ -8,6 +8,15 @@ importers:
 
   .:
     dependencies:
+      '@chunkd/middleware':
+        specifier: ^11.3.0
+        version: 11.3.0
+      '@chunkd/source':
+        specifier: ^11.4.0
+        version: 11.4.0
+      '@chunkd/source-http':
+        specifier: ^11.4.0
+        version: 11.4.0
       '@deck.gl/core':
         specifier: ^9.3.2
         version: 9.3.2
@@ -24,6 +33,9 @@ importers:
         specifier: ^0.7.0
         version: 0.7.0(7c3bc0d5f214322b0f10f0830f778b46)
       '@developmentseed/geotiff':
+        specifier: ^0.7.0
+        version: 0.7.0
+      '@developmentseed/proj':
         specifier: ^0.7.0
         version: 0.7.0
       '@luma.gl/core':

@@ -1,18 +1,10 @@
 import {
   COGLayer,
   MosaicLayer,
-  type GetTileDataOptions,
 } from "@developmentseed/deck.gl-geotiff";
-import type {
-  RasterModule,
-  RenderTileResult,
-} from "@developmentseed/deck.gl-raster";
-import { CreateTexture } from "@developmentseed/deck.gl-raster/gpu-modules";
-import type { Overview } from "@developmentseed/geotiff";
 import { GeoTIFF } from "@developmentseed/geotiff";
+import { epsgResolver } from "@developmentseed/proj";
 import { MapboxOverlay } from "@deck.gl/mapbox";
-import type { Device, Texture } from "@luma.gl/core";
-import type { ShaderModule } from "@luma.gl/shadertools";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -21,123 +13,69 @@ import {
 } from "react-map-gl/maplibre";
 import type { MapRef } from "react-map-gl/maplibre";
 
+import { loadGeoTIFF } from "./loadGeotiff";
+import { getTileData, type S2TileData } from "./getTileData";
+import { renderTile } from "./renderTile";
 import { fetchStacItems, type PartialSTACItem } from "./stac";
 
 const STAC_DATETIME = "2024-01-01T00:00:00Z/2024-12-31T23:59:59Z";
 const STAC_YEAR = 2024;
-
-type TextureDataT = {
-  width: number;
-  height: number;
-  texture: Texture;
-};
+const STAC_BBOX: [number, number, number, number] = [95.0, 0.0, 115.0, 25.0];
 
 const geotiffCache = new Map<string, Promise<GeoTIFF>>();
 
-function getCachedGeoTIFF(url: string, signal?: AbortSignal): Promise<GeoTIFF> {
+type LoadStats = { loaded: number; failed: number; failures: { url: string; err: string }[] };
+const loadStats: LoadStats = { loaded: 0, failed: 0, failures: [] };
+type StatsListener = (s: LoadStats) => void;
+const statsListeners = new Set<StatsListener>();
+function notifyStats() {
+  const snap = { loaded: loadStats.loaded, failed: loadStats.failed, failures: [...loadStats.failures] };
+  for (const fn of statsListeners) fn(snap);
+}
+
+async function loadWithRetry(url: string, attempts = 3): Promise<GeoTIFF> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await loadGeoTIFF(url);
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) {
+        const delay = 300 * 2 ** i + Math.random() * 200;
+        console.warn(`[cog] retry ${i + 1}/${attempts - 1} after ${delay | 0}ms: ${url}`, err);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  console.error(`[cog] giving up on ${url}`, lastErr);
+  throw lastErr;
+}
+
+function getCachedGeoTIFF(url: string): Promise<GeoTIFF> {
   let p = geotiffCache.get(url);
   if (!p) {
-    p = GeoTIFF.fromUrl(url, { signal }).catch((err) => {
-      geotiffCache.delete(url);
-      throw err;
-    });
+    p = loadWithRetry(url).then(
+      (tiff) => {
+        loadStats.loaded++;
+        notifyStats();
+        return tiff;
+      },
+      (err) => {
+        loadStats.failed++;
+        loadStats.failures.push({ url, err: String(err?.message ?? err) });
+        notifyStats();
+        geotiffCache.delete(url);
+        throw err;
+      },
+    );
     geotiffCache.set(url, p);
   }
   return p;
 }
 
-/**
- * Sentinel-2 TCI (true-color image) is 3-band uint8 RGB. WebGPU sampled
- * textures need 4-channel formats, so pad to rgba8unorm with alpha=255 and
- * let the shader discard fully-black no-data pixels.
- */
-function padRgbToRgba(rgb: Uint8Array, width: number, height: number): Uint8Array {
-  const out = new Uint8Array(width * height * 4);
-  for (let i = 0, j = 0; i < rgb.length; i += 3, j += 4) {
-    out[j] = rgb[i];
-    out[j + 1] = rgb[i + 1];
-    out[j + 2] = rgb[i + 2];
-    out[j + 3] = 255;
-  }
-  return out;
-}
-
-async function getTileData(
-  image: GeoTIFF | Overview,
-  options: GetTileDataOptions,
-): Promise<TextureDataT> {
-  const { device, x, y, signal } = options;
-  const tile = await image.fetchTile(x, y, { signal, boundless: false });
-  const { array } = tile;
-  const { width, height } = array;
-
-  let rgba: Uint8Array;
-  if (array.layout === "band-separate") {
-    const [r, g, b] = array.bands as Uint8Array[];
-    rgba = new Uint8Array(width * height * 4);
-    for (let i = 0, j = 0; i < r.length; i++, j += 4) {
-      rgba[j] = r[i];
-      rgba[j + 1] = g[i];
-      rgba[j + 2] = b[i];
-      rgba[j + 3] = 255;
-    }
-  } else {
-    const data = array.data as Uint8Array;
-    if (data.length === width * height * 4) {
-      rgba = data;
-    } else if (data.length === width * height * 3) {
-      rgba = padRgbToRgba(data, width, height);
-    } else {
-      throw new Error(
-        `Unexpected TCI tile size: ${data.length} for ${width}x${height}`,
-      );
-    }
-  }
-
-  const texture = device.createTexture({
-    data: rgba,
-    format: "rgba8unorm",
-    width,
-    height,
-  });
-
-  return { texture, width, height };
-}
-
-/** Drop fully-black pixels (Sentinel-2 cloud/no-data fill). */
-const discardBlack = {
-  name: "discard-black",
-  inject: {
-    "fs:DECKGL_FILTER_COLOR": /* glsl */ `
-      if (color.r + color.g + color.b < 0.01) discard;
-    `,
-  },
-} as const satisfies ShaderModule;
-
-function makeRenderTile() {
-  return function renderTile(tileData: TextureDataT): RenderTileResult {
-    const renderPipeline: RasterModule[] = [
-      { module: CreateTexture, props: { textureName: tileData.texture } },
-      { module: discardBlack, props: {} },
-    ];
-    return { renderPipeline };
-  };
-}
-
-function DeckGLOverlay({
-  layers,
-  onDeviceInitialized,
-}: {
-  layers: any[];
-  onDeviceInitialized?: (device: Device) => void;
-}) {
+function DeckGLOverlay({ layers }: { layers: any[] }) {
   const overlay = useControl(
-    () =>
-      new MapboxOverlay({
-        interleaved: true,
-        layers,
-        onDeviceInitialized,
-      } as any),
+    () => new MapboxOverlay({ interleaved: true, layers } as any),
   );
   overlay.setProps({ layers });
   return null;
@@ -145,14 +83,22 @@ function DeckGLOverlay({
 
 export default function App() {
   const mapRef = useRef<MapRef>(null);
-  const [, setDevice] = useState<Device | null>(null);
   const [labelBeforeId, setLabelBeforeId] = useState<string | undefined>(undefined);
   const [stacItems, setStacItems] = useState<PartialSTACItem[]>([]);
   const [stacError, setStacError] = useState<string | null>(null);
+  const [stats, setStats] = useState<LoadStats>({ loaded: 0, failed: 0, failures: [] });
+
+  useEffect(() => {
+    const fn: StatsListener = (s) => setStats(s);
+    statsListeners.add(fn);
+    return () => {
+      statsListeners.delete(fn);
+    };
+  }, []);
 
   useEffect(() => {
     const ac = new AbortController();
-    fetchStacItems({ datetime: STAC_DATETIME, signal: ac.signal })
+    fetchStacItems({ datetime: STAC_DATETIME, bbox: STAC_BBOX, signal: ac.signal })
       .then((items) => {
         setStacItems(items);
         console.info(`[stac] ${items.length} items for ${STAC_YEAR}`);
@@ -166,34 +112,33 @@ export default function App() {
     return () => ac.abort();
   }, []);
 
-  const renderTile = useMemo(() => makeRenderTile(), []);
-
   const layers = useMemo(() => {
     if (stacItems.length === 0) return [];
     const mosaic = new MosaicLayer<PartialSTACItem, GeoTIFF>({
       id: "s2-mosaic",
       sources: stacItems,
-      getSource: (source, { signal }) =>
-        getCachedGeoTIFF(source.assets.visual.href, signal),
-      renderSource: (source, { data, signal }) =>
-        new COGLayer<TextureDataT>({
+      getSource: (source) => getCachedGeoTIFF(source.assets.visual.href),
+      renderSource: (source, { data, signal }) => {
+        if (!data) return null;
+        return new COGLayer<S2TileData>({
           id: `s2-cog-${source.id}`,
           geotiff: data,
+          epsgResolver,
           getTileData,
           renderTile,
           signal,
-        }),
-      maxCacheSize: 0,
+        });
+      },
       // @ts-expect-error beforeId is injected by @deck.gl/mapbox
       beforeId: labelBeforeId,
     });
     return [mosaic];
-  }, [renderTile, stacItems, labelBeforeId]);
+  }, [stacItems, labelBeforeId]);
 
   const initialViewState = {
-    longitude: 0,
-    latitude: 20,
-    zoom: 2,
+    longitude: 106,
+    latitude: 14,
+    zoom: 4,
     pitch: 0,
     bearing: 0,
   };
@@ -203,8 +148,8 @@ export default function App() {
       <MaplibreMap
         ref={mapRef}
         initialViewState={initialViewState}
-        minZoom={1}
-        mapStyle="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+        minZoom={3}
+        mapStyle="https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json"
         onLoad={(e) => {
           const map = e.target;
           const ls = map.getStyle()?.layers ?? [];
@@ -212,12 +157,13 @@ export default function App() {
           if (firstSymbol) setLabelBeforeId(firstSymbol.id);
         }}
       >
-        <DeckGLOverlay layers={layers} onDeviceInitialized={setDevice} />
+        <DeckGLOverlay layers={layers} />
       </MaplibreMap>
       <InfoPanel
         sourceCount={stacItems.length}
         year={STAC_YEAR}
         error={stacError}
+        stats={stats}
       />
     </div>
   );
@@ -227,13 +173,23 @@ function InfoPanel({
   sourceCount,
   year,
   error,
+  stats,
 }: {
   sourceCount: number;
   year: number | null;
   error: string | null;
+  stats: LoadStats;
 }) {
+  const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
+  const copyFailures = () => {
+    const text = stats.failures.map((f) => `${f.url}\n  ${f.err}`).join("\n\n");
+    navigator.clipboard?.writeText(text).catch(() => {});
+  };
   return (
     <div
+      onMouseDown={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
       style={{
         position: "absolute",
         top: 12,
@@ -244,6 +200,9 @@ function InfoPanel({
         fontSize: 12,
         borderRadius: 6,
         boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+        maxWidth: 480,
+        userSelect: "text",
+        WebkitUserSelect: "text",
       }}
     >
       <div style={{ fontWeight: 600, fontSize: 14 }}>
@@ -269,8 +228,52 @@ function InfoPanel({
           ? `STAC error: ${error}`
           : sourceCount === 0
             ? "loading STAC items…"
-            : `${sourceCount} source COGs · earthgenome / source.coop`}
+            : `${sourceCount} sources · ${stats.loaded} loaded · ${stats.failed} failed · ${pending} pending`}
       </div>
+      {stats.failures.length > 0 && (
+        <details open style={{ marginTop: 6, fontSize: 11 }}>
+          <summary style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
+            <span>{stats.failures.length} failed</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                copyFailures();
+              }}
+              style={{
+                fontSize: 10,
+                padding: "2px 6px",
+                background: "rgba(255,255,255,0.15)",
+                color: "white",
+                border: "1px solid rgba(255,255,255,0.3)",
+                borderRadius: 3,
+                cursor: "pointer",
+              }}
+            >
+              copy all
+            </button>
+          </summary>
+          <ul
+            style={{
+              margin: "6px 0 0 0",
+              paddingLeft: 14,
+              maxHeight: 220,
+              overflow: "auto",
+              userSelect: "text",
+              WebkitUserSelect: "text",
+            }}
+          >
+            {stats.failures.map((f, i) => (
+              <li key={i} style={{ wordBreak: "break-all", marginBottom: 6 }}>
+                <code style={{ fontSize: 10, userSelect: "all", WebkitUserSelect: "all" }}>{f.url}</code>
+                <div style={{ opacity: 0.75, marginTop: 2, userSelect: "text", WebkitUserSelect: "text" }}>
+                  {f.err}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }

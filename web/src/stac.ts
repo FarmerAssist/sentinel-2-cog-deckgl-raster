@@ -56,6 +56,7 @@ export type FetchOptions = {
 export async function fetchStacItems(opts: FetchOptions): Promise<PartialSTACItem[]> {
   const { datetime, bbox, maxItems = 5000, signal } = opts;
   const items: PartialSTACItem[] = [];
+  const rejectedHosts = new Map<string, number>();
 
   const params = new URLSearchParams({
     collections: COLLECTION,
@@ -80,7 +81,10 @@ export async function fetchStacItems(opts: FetchOptions): Promise<PartialSTACIte
       } catch {
         continue;
       }
-      if (!CORS_OK_HOSTS.has(host)) continue;
+      if (!CORS_OK_HOSTS.has(host)) {
+        rejectedHosts.set(host, (rejectedHosts.get(host) ?? 0) + 1);
+        continue;
+      }
       items.push({
         id: feat.id,
         bbox: feat.bbox,
@@ -91,6 +95,16 @@ export async function fetchStacItems(opts: FetchOptions): Promise<PartialSTACIte
 
     const next = fc.links?.find((l) => l.rel === "next");
     url = next?.href ?? null;
+  }
+
+  if (rejectedHosts.size > 0) {
+    const summary = [...rejectedHosts.entries()]
+      .map(([h, n]) => `${h} (${n})`)
+      .join(", ");
+    console.warn(
+      `[stac] dropped items from non-CORS-OK hosts: ${summary}. ` +
+        `Update CORS_OK_HOSTS in src/stac.ts if any of these are now CORS-open.`,
+    );
   }
 
   return items;
