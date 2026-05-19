@@ -10,6 +10,17 @@
 const STAC_ROOT = "https://stac.earthgenome.org";
 const COLLECTION = "sentinel2-temporal-mosaics";
 
+/**
+ * Hosts known to serve the COGs with permissive CORS.
+ *
+ * The STAC API mixes two backends: source.coop (CORS-open mirror, partial
+ * coverage — seasonal 2024 composites only) and ei-imagery.s3.us-east-2
+ * (raw S3, CORS-blocked from the browser, holds the full-year annual
+ * mosaics). For now we filter to the CORS-open subset; everything else
+ * 403s and cascades into deck.gl error spam.
+ */
+const CORS_OK_HOSTS = new Set(["data.source.coop"]);
+
 export type PartialSTACItem = {
   id: string;
   bbox: [number, number, number, number];
@@ -63,6 +74,13 @@ export async function fetchStacItems(opts: FetchOptions): Promise<PartialSTACIte
     for (const feat of fc.features) {
       const visual = feat.assets["TCI"] ?? feat.assets["visual"];
       if (!visual?.href) continue;
+      let host: string;
+      try {
+        host = new URL(visual.href).host;
+      } catch {
+        continue;
+      }
+      if (!CORS_OK_HOSTS.has(host)) continue;
       items.push({
         id: feat.id,
         bbox: feat.bbox,
