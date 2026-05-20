@@ -41,9 +41,13 @@ Two kinds of render selectable from the in-app panel:
 - **Spectral indices** — normalized-difference indices computed in a shader
   over two bands via `MultiCOGLayer`, rescaled, and sampled through a colormap:
   NDVI (B08/B04) and NDWI (B03/B08) — both all-10 m bands. (NDBI/NDMI were
-  dropped: pairing 20 m B11 with a 10 m band seamed.) Colormaps
-  include sequential (cividis/viridis/plasma) and divergent (rdylgn/rdbu/
-  spectral) ramps; a symmetric range centers divergent ramps at 0. See
+  dropped: pairing 20 m B11 with a 10 m band seamed.) The colormap set is
+  **deuteranopia-friendly**: the red-green ramps (rdylgn, spectral) were dropped
+  because they're indistinguishable to red-green colorblind viewers. What's left
+  is the perceptually-uniform sequentials (cividis/viridis/plasma), a blue-red
+  divergent (rdbu), and four CARTOColors palettes injected via
+  `web/src/cartoColormaps.ts` (Emrld, Earth, Geyser, Sunset — not in the shipped
+  sprite). A symmetric range centers divergent ramps at 0. See
   `docs/SPECTRAL_INDICES.md` for the registry and the catalog roadmap.
 
 Other panel controls: an AOI **draw** tool (drag a box to set the search
@@ -94,6 +98,53 @@ the basemap swap, the multi-band swap, the NDVI/colormap UI. See the
 project [`CLAUDE.md`](./CLAUDE.md), [`docs/MULTICOG_NDVI.md`](./docs/MULTICOG_NDVI.md),
 and the `.claude/memory/` directory for the context Claude was working
 with.
+
+## Using this with other datasets
+
+Nothing here is Sentinel-2-specific below the asset layer — the engine just
+opens Cloud-Optimized GeoTIFFs over HTTP Range. To point it at a different
+collection, the format matters more than the source:
+
+- **The data must be COGs** — internally tiled with overviews, so the reader can
+  fetch one map tile without downloading the file. A plain GeoTIFF won't stream.
+- **A STAC API or static catalog** is the low-friction path — `src/stac.ts`
+  enumerates items and reads asset hrefs. You can also hardcode an `items.json`.
+- **EPSG:3857 avoids in-shader reprojection.** This collection is already
+  web-mercator; other CRSs work but lean on `@developmentseed/proj` (the CDL
+  predecessor reprojected EPSG:5070 Albers — see its git history).
+- **CORS must be open** on the tile host (and the STAC host). Browser-side range
+  reads are blocked otherwise; `stac.ts` filters CORS-blocked hosts here.
+
+### Where to find Dev Seed's examples
+
+The cleanest way to learn the patterns for a new dataset is to read Dev Seed's
+own examples — each demonstrates a different asset shape:
+
+- **deck.gl-raster examples** —
+  [github.com/developmentseed/deck.gl-raster](https://github.com/developmentseed/deck.gl-raster)
+  → the `examples/` directory, with a live gallery at
+  [developmentseed.org/deck.gl-raster](https://developmentseed.org/deck.gl-raster/).
+  The ones this app leaned on:
+  - **naip-mosaic** — the seam-free "one COGLayer per item" RGB pattern + the
+    NDVI live-filter shape (what `RGB` mode here is built on).
+  - **vermont** — the same NDVI math over a single scene.
+  - **sentinel-2** — multi-band composite presets (true/false-color band combos).
+- **deck.gl-geotiff examples** —
+  [github.com/developmentseed/deck.gl-geotiff](https://github.com/developmentseed/deck.gl-geotiff)
+  → `MosaicLayer` / `COGLayer` / `MultiCOGLayer` usage, the layer tier this app
+  sits on.
+- **@developmentseed/geotiff** —
+  [github.com/developmentseed/geotiff](https://github.com/developmentseed/geotiff)
+  → the COG reader itself, if you need to debug byte-range/decode behavior.
+
+Match your dataset to the closest example's **asset layout** (single precomposed
+RGB asset vs. separate per-band COGs), copy that example's layer + pipeline
+shape, then swap the STAC endpoint and asset keys. `docs/MULTICOG_NDVI.md`
+records exactly which findings from each example carried into this app.
+
+> The `0.7` line moves fast and the shader-pipeline shape has changed across
+> minor versions — **check the latest from those repos before you start**; the
+> snippets here are pinned to specific versions.
 
 ## Architecture
 

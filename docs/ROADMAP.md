@@ -57,6 +57,14 @@ enabler for big-AOI loads:
   only streams tiles for visible items, so this caps how many sources are open
   at once.
 
+### Layering two indices (NDVI + NDWI)
+
+Showing vegetation and water together in one view. Both indices are all-10 m and
+share B08, so the data side is cheap; the open question is how to combine two
+scalar fields into color (channel-split bivariate, masked overlay, 2D colormap,
+or thematic classify). Directions + trade-offs written up in
+[`docs/INDEX_LAYERING.md`](./INDEX_LAYERING.md). Not started.
+
 ### Suggested build order
 
 1. Geocoder text box + toggleable marker.
