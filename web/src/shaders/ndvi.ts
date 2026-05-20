@@ -1,22 +1,25 @@
 import type { ShaderModule } from "@luma.gl/shadertools";
 
 /**
- * NDVI from a NIR-in-r / red-in-g packed color.
+ * Generic normalized difference `(a - b) / (a + b)` from an a-in-r / b-in-g
+ * packed color. Drives every curated index (NDVI, NDWI, NDBI, NDMI) — only the
+ * band → slot mapping differs per index (see `INDICES` in renderPipeline.ts).
  *
- * Runs after MultiCOGLayer's auto-prepended CompositeBands module, which
- * has already written `composite.r` (NIR) into `color.r` and `composite.g`
- * (red) into `color.g`. We compute NDVI = (NIR - red) / (NIR + red) into
- * `color.r` in the range [-1, 1], and a downstream LinearRescale then
- * maps it to [0, 1] for Colormap sampling.
+ * Runs after MultiCOGLayer's auto-prepended CompositeBands module, which has
+ * written `composite.r` (band a) into `color.r` and `composite.g` (band b) into
+ * `color.g`. We compute the ratio into `color.r` in [-1, 1]; a downstream
+ * LinearRescale then maps it to [0, 1] for Colormap sampling.
  */
-export const NdviFromRG = {
-  name: "ndvi-from-rg",
+export const NormalizedDifference = {
+  name: "normalized-difference",
   inject: {
     "fs:DECKGL_FILTER_COLOR": /* glsl */ `
-      float nir = color.r;
-      float red = color.g;
-      float denom = nir + red;
-      color.r = denom > 0.0 ? (nir - red) / denom : 0.0;
+      // Names must not collide with CompositeBands' injected locals (it declares
+      // float a/b/g/r for alpha/blue/green/red in this same function scope).
+      float ndA = color.r;
+      float ndB = color.g;
+      float ndDenom = ndA + ndB;
+      color.r = ndDenom > 0.0 ? (ndA - ndB) / ndDenom : 0.0;
     `,
   },
 } as const satisfies ShaderModule;

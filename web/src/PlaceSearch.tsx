@@ -13,9 +13,18 @@ export function PlaceSearch({ onPick }: { onPick: (r: GeoResult) => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
   // Set when we fill the input from a selection, so the debounce effect below
   // doesn't re-search and reopen the dropdown after the user has picked.
   const skipSearch = useRef(false);
+
+  const clear = () => {
+    setQ("");
+    setResults([]);
+    setOpen(false);
+    setActive(-1);
+    inputRef.current?.focus();
+  };
 
   // Photon's free endpoint discourages a per-keystroke storm: wait 350ms after
   // typing stops and require >=3 chars.
@@ -78,6 +87,7 @@ export function PlaceSearch({ onPick }: { onPick: (r: GeoResult) => void }) {
   return (
     <div style={{ position: "relative", marginTop: 8 }}>
       <input
+        ref={inputRef}
         type="text"
         value={q}
         placeholder="search a place…"
@@ -88,7 +98,7 @@ export function PlaceSearch({ onPick }: { onPick: (r: GeoResult) => void }) {
         style={{
           width: "100%",
           boxSizing: "border-box",
-          padding: "5px 8px",
+          padding: "5px 24px 5px 8px",
           fontSize: 12,
           borderRadius: 4,
           border: "1px solid rgba(255,255,255,0.25)",
@@ -97,10 +107,35 @@ export function PlaceSearch({ onPick }: { onPick: (r: GeoResult) => void }) {
           outline: "none",
         }}
       />
-      {busy && (
+      {busy ? (
         <span style={{ position: "absolute", right: 8, top: 6, fontSize: 10, opacity: 0.5 }}>
           …
         </span>
+      ) : (
+        q.length > 0 && (
+          <button
+            type="button"
+            aria-label="clear search"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={clear}
+            style={{
+              position: "absolute",
+              right: 4,
+              top: 3,
+              width: 18,
+              height: 18,
+              padding: 0,
+              lineHeight: "16px",
+              fontSize: 13,
+              background: "transparent",
+              border: "none",
+              color: "rgba(255,255,255,0.55)",
+              cursor: "pointer",
+            }}
+          >
+            ×
+          </button>
+        )
       )}
       {open && results.length > 0 && (
         <ul

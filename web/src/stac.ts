@@ -26,14 +26,18 @@ export type PartialSTACItem = {
   bbox: [number, number, number, number];
   assets: {
     visual: { href: string };
-    B02: { href: string };
     B03: { href: string };
     B04: { href: string };
     B08: { href: string };
+    B11: { href: string };
   };
 };
 
-const REQUIRED_BANDS = ["B02", "B03", "B04", "B08"] as const;
+// Bands the curated index set needs: B04(red) B08(NIR) for NDVI, B03(green) for
+// NDWI, B11(SWIR) for NDBI/NDMI. B02 dropped — RGB now renders the TCI `visual`
+// asset via COGLayer, not a B04/B03/B02 composite. Items missing any of these
+// are skipped (loses a little coverage but keeps every index renderable).
+const REQUIRED_BANDS = ["B03", "B04", "B08", "B11"] as const;
 
 type StacFeature = {
   id: string;
@@ -115,10 +119,10 @@ export async function fetchStacItems(opts: FetchOptions): Promise<FetchResult> {
         bbox: feat.bbox,
         assets: {
           visual: { href: visual.href },
-          B02: bandAssets.B02,
           B03: bandAssets.B03,
           B04: bandAssets.B04,
           B08: bandAssets.B08,
+          B11: bandAssets.B11,
         },
       });
       if (items.length >= maxItems) break;

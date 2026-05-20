@@ -21,8 +21,8 @@ contributes header reads and tile range fetches.
 
 ```bash
 cd web
-pnpm install
-pnpm dev          # http://localhost:5455
+npm install
+npm run dev       # http://localhost:5455
 ```
 
 No data prebake. STAC items are fetched live from
@@ -32,14 +32,22 @@ No data prebake. STAC items are fetched live from
 
 ## What the app does
 
-Two render modes selectable from the in-app panel:
+Two kinds of render selectable from the in-app panel:
 
-- **RGB** — natural-color composite from `B04/B03/B02`, with a log-spaced
-  brightness slider (`LinearRescale.rescaleMax`, 0.003–0.2 in r16unorm
-  units; default 0.05 ≈ TCI brightness).
-- **NDVI** — `(B08 − B04) / (B08 + B04)` computed in a shader module,
-  rescaled to [0,1], sampled through a colormap. Three colormap options
-  exposed: cividis, viridis, plasma.
+- **RGB (TCI)** — the precomposed 3-band TCI `visual` asset rendered as one
+  `COGLayer` per item (the seam-free naip-mosaic pattern), with a uniform
+  brightness gain (`ScaleColor`, 1.0 = faithful TCI). *Not* a B04/B03/B02
+  composite — that earlier path produced tile seams; see `docs/SEAMS.md`.
+- **Spectral indices** — normalized-difference indices computed in a shader
+  over two bands via `MultiCOGLayer`, rescaled, and sampled through a colormap:
+  NDVI (B08/B04), NDWI (B03/B08), NDBI (B11/B08), NDMI (B08/B11). Colormaps
+  include sequential (cividis/viridis/plasma) and divergent (rdylgn/rdbu/
+  spectral) ramps; a symmetric range centers divergent ramps at 0. See
+  `docs/SPECTRAL_INDICES.md` for the registry and the catalog roadmap.
+
+Other panel controls: an AOI **draw** tool (drag a box to set the search
+extent), a search-clear (×), a labels toggle, and a load scoreboard with a
+copy-failures debug list.
 
 A year dropdown (2022 / 2023 / 2024) drives the STAC `datetime` filter.
 The collection advertises 2018–2021 too but those items live on a
@@ -88,9 +96,9 @@ stac.earthgenome.org  ──┐
                   PartialSTACItem[]  →  MosaicLayer
                                               │
                                               ▼ per STAC item in viewport
-                                      MultiCOGLayer
-                                       (B04/B03/B02 for RGB,
-                                        B08/B04 for NDVI)
+                                COGLayer (RGB: TCI visual asset)
+                                  — or —
+                                MultiCOGLayer (indices: 2 bands)
                                               │
                                               ▼ per visible map tile
                                       RasterTileLayer (internal)
@@ -114,11 +122,13 @@ RGB channels before the user pipeline runs.
 
 | file                          | role                                                            |
 |-------------------------------|-----------------------------------------------------------------|
-| `web/src/App.tsx`             | map shell, mode/year/brightness/colormap state, layer wiring    |
+| `web/src/App.tsx`             | map shell, mode/year/brightness/colormap state, draw tool, layer wiring |
 | `web/src/stac.ts`             | STAC `/search` paginator, CORS-host filter, required-band check |
-| `web/src/renderPipeline.ts`   | per-mode `sources`, `composite`, and shader-module pipeline     |
-| `web/src/shaders/ndvi.ts`     | `NdviFromRG` — `(r-g)/(r+g)` over post-composite color          |
-| `web/src/discardBlack.ts`     | `discardBoundlessPadding` — drops MultiCOG's zero-padded edges  |
+| `web/src/renderPipeline.ts`   | `INDICES` registry, per-index `sources`/`composite`/pipeline    |
+| `web/src/shaders/ndvi.ts`     | `NormalizedDifference` — `(r-g)/(r+g)`, shared by all indices    |
+| `web/src/loadStats.ts`        | pub-sub store backing the in-panel load scoreboard              |
+| `web/src/discardBlack.ts`     | `discardBlack` (RGB) + `discardBoundlessPadding` (indices)      |
+| `docs/SPECTRAL_INDICES.md`    | curated index registry + awesome-spectral-indices roadmap       |
 | `docs/MULTICOG_NDVI.md`       | design notes + upstream-example findings                        |
 
 ## Stack
@@ -147,9 +157,9 @@ is pinned to specific versions.
 Items are `MGRSTILE_YYYY-MM-DD_YYYY-MM-DD` (e.g. `31UFT_2024-04-01_2024-08-01`).
 Each item has assets `B01..B12`, `B8A` (single-band uint16 reflectance per
 Sentinel-2 band) plus `TCI` (3-band uint8 RGB visualization composite).
-The app uses **B02/B03/B04/B08** for RGB and NDVI rendering; TCI is no
-longer wired in but `stac.ts` still requires its href as a sentinel that
-the item is renderable.
+RGB renders the **TCI** `visual` asset directly (one COGLayer per item);
+indices pull **B03/B04/B08/B11** through MultiCOGLayer. `stac.ts` requires
+all four index bands plus a TCI href, skipping items missing any.
 
 - CRS: EPSG:3857 (all bands; verified via `gdalinfo /vsicurl/...`).
 - Per-band texture format: `r16unorm` — sampler returns `raw / 65535`
@@ -211,10 +221,9 @@ Web Mercator and the composites/indices are GPU-side. The git history
 of the predecessor (`cdl-lonboard-05-2026`) has all of it if it's ever
 needed back.
 
-A few files from the original TCI-only wiring (`loadGeotiff.ts`,
-`getTileData.ts`, `renderTile.ts`) are still in the repo but no longer
-imported by `App.tsx`. They're kept as reference for the per-tile
-custom-loader pattern in case we ever go back to single-COG-per-item.
+`loadGeotiff.ts`, `getTileData.ts`, and `renderTile.ts` implement the
+per-tile custom-loader path used by **RGB** (one COGLayer per item on the TCI
+asset). Index modes don't use them — MultiCOGLayer owns its own tile loading.
 
 ## Memory & context
 

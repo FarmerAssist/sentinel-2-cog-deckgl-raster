@@ -22,19 +22,29 @@ import {
 import type { MapRef } from "react-map-gl/maplibre";
 
 import { fetchStacItems, type PartialSTACItem } from "./stac";
+import {
+  reportFailed,
+  reportLoaded,
+  resetStats,
+  subscribeStats,
+  type StatsSnapshot,
+} from "./loadStats";
 import { resultToBbox, type GeoResult } from "./geocode";
 import { PlaceSearch } from "./PlaceSearch";
 import { loadGeoTIFF } from "./loadGeotiff";
 import { getTileData, type S2TileData } from "./getTileData";
 import { renderTile } from "./renderTile";
 import {
+  bandSlotsFor,
   buildRenderPipeline,
-  COMPOSITE,
   DEFAULT_NDVI_COLORMAP,
   DEFAULT_NDVI_RANGE,
   DEFAULT_NDVI_SCALE,
+  INDEX_COMPOSITE,
+  INDICES,
+  INDEX_KEYS,
+  isIndexMode,
   NDVI_COLORMAPS,
-  SOURCE_BANDS,
   type NdviColormap,
   type RenderMode,
 } from "./renderPipeline";
@@ -135,7 +145,11 @@ export default function App() {
   const [bbox, setBbox] = useState<[number, number, number, number]>(STAC_BBOX);
   const [marker, setMarker] = useState<{ lng: number; lat: number; label: string } | null>(null);
   const [showMarker, setShowMarker] = useState(true);
-  const stats: LoadStats = { loaded: 0, failed: 0, failures: [] };
+  const [drawing, setDrawing] = useState(false);
+  const [stats, setStats] = useState<LoadStats>({ loaded: 0, failed: 0, failures: [] });
+
+  // Mirror the module-level load scoreboard into React state.
+  useEffect(() => subscribeStats(setStats), []);
 
   const mapStyle = labels
     ? "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
@@ -175,30 +189,51 @@ export default function App() {
     };
   }, [device]);
 
+  // Fresh scoreboard whenever the source set changes (AOI / year) or the render
+  // mode switches — stale per-AOI counts would otherwise carry over.
+  useEffect(() => resetStats(), [bbox, year, mode]);
+
   useEffect(() => {
     const ac = new AbortController();
     setStacItems([]);
     setStacError(null);
-    fetchStacItems({ datetime: yearToDatetime(year), bbox, signal: ac.signal })
-      .then(({ items, rejected }) => {
-        setStacItems(items);
-        console.info(`[stac] ${items.length} items for ${year} (${rejected} CORS-blocked)`);
-        if (items.length === 0) {
-          setStacError(
-            rejected > 0
-              ? `No CORS-open imagery here — ${rejected} item${rejected > 1 ? "s" : ""} exist but are on a CORS-blocked host. Try the Americas or Europe.`
-              : "No imagery for this area/year.",
-          );
-        }
-      })
-      .catch((err) => {
-        if (err.name !== "AbortError") {
-          console.error("[stac] fetch failed:", err);
-          setStacError(String(err.message ?? err));
-        }
-      });
-    return () => ac.abort();
+    // Debounce: rapid bbox changes (draw-tool drags, repeated searches) would
+    // otherwise kick off overlapping /search paginations against the public
+    // STAC API. Wait for the AOI to settle before fetching.
+    const t = setTimeout(() => {
+      fetchStacItems({ datetime: yearToDatetime(year), bbox, signal: ac.signal })
+        .then(({ items, rejected }) => {
+          setStacItems(items);
+          console.info(`[stac] ${items.length} items for ${year} (${rejected} CORS-blocked)`);
+          if (items.length === 0) {
+            setStacError(
+              rejected > 0
+                ? `No CORS-open imagery here — ${rejected} item${rejected > 1 ? "s" : ""} exist but are on a CORS-blocked host. Try the Americas or Europe.`
+                : "No imagery for this area/year.",
+            );
+          }
+        })
+        .catch((err) => {
+          if (err.name !== "AbortError") {
+            console.error("[stac] fetch failed:", err);
+            setStacError(String(err.message ?? err));
+          }
+        });
+    }, 400);
+    return () => {
+      clearTimeout(t);
+      ac.abort();
+    };
   }, [year, bbox]);
+
+  // Box drawn on the map (item 5): the [W,S,E,N] becomes the new STAC AOI,
+  // mirroring lonboard's `selected_bounds`. Drops a marker at the box center.
+  const handleDrawBox = (bb: [number, number, number, number]) => {
+    setBbox(bb);
+    setMarker({ lng: (bb[0] + bb[2]) / 2, lat: (bb[1] + bb[3]) / 2, label: "drawn AOI" });
+    setShowMarker(true);
+    setDrawing(false);
+  };
 
   const handlePickPlace = (r: GeoResult) => {
     const bb = resultToBbox(r);
@@ -227,7 +262,19 @@ export default function App() {
         id: `s2-mosaic-rgb-${gen}`,
         sources: stacItems,
         maxCacheSize: 0,
-        getSource: (source) => getCachedGeoTIFF(source.assets.visual.href),
+        getSource: (source) => {
+          const url = source.assets.visual.href;
+          return getCachedGeoTIFF(url).then(
+            (g) => {
+              reportLoaded(url);
+              return g;
+            },
+            (e) => {
+              reportFailed(url, e instanceof Error ? e.message : String(e));
+              throw e;
+            },
+          );
+        },
         renderSource: (source, { data }) =>
           new COGLayer<S2TileData>({
             id: `s2-cog-rgb-${gen}-${source.id}`,
@@ -248,12 +295,13 @@ export default function App() {
       return [mosaic];
     }
 
-    // NDVI: needs the B08/B04 ratio, so keep the MultiCOGLayer composite path.
-    // NDVI is inherently seam-free (the ratio cancels per-edge offsets).
+    // Spectral indices: need a 2-band ratio, so keep the MultiCOGLayer composite
+    // path. Normalized-difference indices are seam-free (the ratio cancels
+    // per-edge brightness offsets).
     if (!colormapTexture) return [];
 
-    const bandSlots = SOURCE_BANDS[mode];
-    const composite = COMPOSITE[mode];
+    const bandSlots = bandSlotsFor(mode);
+    const composite = INDEX_COMPOSITE;
     const pipeline = buildRenderPipeline(mode, colormapTexture, {
       ndviColormap,
       ndviRange,
@@ -338,6 +386,7 @@ export default function App() {
         }}
       >
         <DeckGLOverlay layers={layers} onDevice={setDevice} />
+        <DrawBbox mapRef={mapRef} active={drawing} onComplete={handleDrawBox} />
         {marker && showMarker && (
           <Marker longitude={marker.lng} latitude={marker.lat} anchor="bottom">
             <div
@@ -378,6 +427,8 @@ export default function App() {
         hasMarker={marker !== null}
         showMarker={showMarker}
         onToggleMarker={() => setShowMarker((v) => !v)}
+        drawing={drawing}
+        onToggleDraw={() => setDrawing((v) => !v)}
       />
     </div>
   );
@@ -406,6 +457,8 @@ function InfoPanel({
   hasMarker,
   showMarker,
   onToggleMarker,
+  drawing,
+  onToggleDraw,
 }: {
   sourceCount: number;
   year: number | null;
@@ -429,6 +482,8 @@ function InfoPanel({
   hasMarker: boolean;
   showMarker: boolean;
   onToggleMarker: () => void;
+  drawing: boolean;
+  onToggleDraw: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
@@ -534,28 +589,47 @@ function InfoPanel({
             ? "loading STAC items…"
             : `${sourceCount} sources · ${stats.loaded} loaded · ${stats.failed} failed · ${pending} pending`}
       </div>
-      <div style={{ marginTop: 8, display: "flex", gap: 4 }}>
-        {(["rgb", "ndvi"] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            onClick={() => onModeChange(m)}
-            style={{
-              padding: "4px 10px",
-              fontSize: 11,
-              borderRadius: 3,
-              border: "1px solid rgba(255,255,255,0.3)",
-              background:
-                mode === m ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
-              color: "white",
-              cursor: "pointer",
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-            }}
-          >
-            {m === "rgb" ? "RGB (B04/B03/B02)" : "NDVI (cividis)"}
-          </button>
-        ))}
+      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6 }}>
+        <button
+          type="button"
+          onClick={() => onModeChange("rgb")}
+          style={{
+            padding: "4px 10px",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid rgba(255,255,255,0.3)",
+            background: mode === "rgb" ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
+            color: "white",
+            cursor: "pointer",
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+          }}
+        >
+          RGB (TCI)
+        </button>
+        <span style={{ opacity: 0.4, fontSize: 11 }}>or index</span>
+        <select
+          value={isIndexMode(mode) ? mode : ""}
+          onChange={(e) => onModeChange(e.target.value as RenderMode)}
+          style={{
+            fontSize: 11,
+            padding: "3px 6px",
+            background: "rgba(255,255,255,0.12)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 3,
+            color: "white",
+            cursor: "pointer",
+          }}
+        >
+          <option value="" disabled style={{ background: "#222" }}>
+            choose…
+          </option>
+          {INDEX_KEYS.map((k) => (
+            <option key={k} value={k} style={{ background: "#222" }}>
+              {INDICES[k].label} · {INDICES[k].desc}
+            </option>
+          ))}
+        </select>
       </div>
       <div style={{ marginTop: 8, display: "flex", gap: 4 }}>
         <button
@@ -573,6 +647,23 @@ function InfoPanel({
           }}
         >
           labels {labels ? "on" : "off"}
+        </button>
+        <button
+          type="button"
+          onClick={onToggleDraw}
+          title="Drag a rectangle on the map to set the area of interest"
+          style={{
+            padding: "4px 10px",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid rgba(255,255,255,0.3)",
+            background: drawing ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
+            color: "white",
+            cursor: "pointer",
+            letterSpacing: 0.5,
+          }}
+        >
+          {drawing ? "draw: drag a box…" : "draw AOI"}
         </button>
         {hasMarker && (
           <button
@@ -593,10 +684,10 @@ function InfoPanel({
           </button>
         )}
       </div>
-      {mode === "ndvi" && (
+      {isIndexMode(mode) && (
         <div style={{ marginTop: 8, fontSize: 11 }}>
           <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.8 }}>
-            <span>NDVI range</span>
+            <span>index range</span>
             <span style={{ opacity: 0.6 }}>
               {ndviRange[0].toFixed(2)} → {ndviRange[1].toFixed(2)}
             </span>
@@ -643,8 +734,8 @@ function InfoPanel({
           />
         </div>
       )}
-      {mode === "ndvi" && (
-        <div style={{ marginTop: 8, display: "flex", gap: 4 }}>
+      {isIndexMode(mode) && (
+        <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 4 }}>
           {NDVI_COLORMAPS.map((c) => (
             <button
               key={c}
@@ -668,6 +759,12 @@ function InfoPanel({
               {c}
             </button>
           ))}
+        </div>
+      )}
+      {isIndexMode(mode) && (
+        <div style={{ marginTop: 6, fontSize: 10, opacity: 0.45 }}>
+          Indices use Earth Genome's public Sentinel-2 bands. Productionizing
+          against Satellogic imagery needs their band/asset conventions + auth.
         </div>
       )}
       {mode === "rgb" && (
@@ -737,7 +834,91 @@ function InfoPanel({
           </ul>
         </details>
       )}
+      <div style={{ marginTop: 8, fontSize: 10, opacity: 0.4 }}>
+        Tiles stale or blank? Hard-reload (⌘⇧R / Ctrl+Shift+R).
+      </div>
     </div>
+  );
+}
+
+/**
+ * Drag-to-draw an AOI rectangle on the map (item 5; lonboard `selected_bounds`
+ * pattern). While `active`, map panning is disabled and a mousedown→drag→mouseup
+ * gesture captures two corners. maplibre hands us `e.lngLat` directly, so we
+ * build the [W,S,E,N] box from the two corner lng/lats — no unproject needed.
+ * A rubber-band div tracks the drag in screen space. Tiny boxes (a stray click)
+ * are ignored.
+ */
+function DrawBbox({
+  mapRef,
+  active,
+  onComplete,
+}: {
+  mapRef: React.RefObject<MapRef | null>;
+  active: boolean;
+  onComplete: (bbox: [number, number, number, number]) => void;
+}) {
+  const [rect, setRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+
+  useEffect(() => {
+    if (!active) return;
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+
+    map.dragPan.disable();
+    map.getCanvas().style.cursor = "crosshair";
+    let start: { x: number; y: number; lng: number; lat: number } | null = null;
+
+    const down = (e: any) => {
+      start = { x: e.point.x, y: e.point.y, lng: e.lngLat.lng, lat: e.lngLat.lat };
+      setRect({ x0: e.point.x, y0: e.point.y, x1: e.point.x, y1: e.point.y });
+    };
+    const move = (e: any) => {
+      if (!start) return;
+      setRect((r) => (r ? { ...r, x1: e.point.x, y1: e.point.y } : r));
+    };
+    const up = (e: any) => {
+      if (!start) return;
+      const w = Math.min(start.lng, e.lngLat.lng);
+      const east = Math.max(start.lng, e.lngLat.lng);
+      const s = Math.min(start.lat, e.lngLat.lat);
+      const n = Math.max(start.lat, e.lngLat.lat);
+      start = null;
+      setRect(null);
+      if (east - w > 1e-4 && n - s > 1e-4) onComplete([w, s, east, n]);
+    };
+
+    map.on("mousedown", down);
+    map.on("mousemove", move);
+    map.on("mouseup", up);
+    return () => {
+      map.off("mousedown", down);
+      map.off("mousemove", move);
+      map.off("mouseup", up);
+      map.dragPan.enable();
+      map.getCanvas().style.cursor = "";
+    };
+  }, [active, mapRef, onComplete]);
+
+  if (!rect) return null;
+  const left = Math.min(rect.x0, rect.x1);
+  const top = Math.min(rect.y0, rect.y1);
+  const width = Math.abs(rect.x1 - rect.x0);
+  const height = Math.abs(rect.y1 - rect.y0);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top,
+        width,
+        height,
+        border: "1.5px dashed #ff4d4f",
+        background: "rgba(255,77,79,0.12)",
+        pointerEvents: "none",
+        zIndex: 5,
+      }}
+    />
   );
 }
 

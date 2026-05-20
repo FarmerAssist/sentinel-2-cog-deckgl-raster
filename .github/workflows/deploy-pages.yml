@@ -22,29 +22,21 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
-      
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-          
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
-          
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      
-      # Optional, but helps configure-pages find framework configs if you use them
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+
       - uses: actions/configure-pages@v5
-        with:
-          static_site_generator: literal
-          
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          # FIXED: This step runs from the root, so 'web/dist' is correct here 
-          # because the working-directory default doesn't apply to 'uses'
+          # 'uses' steps ignore working-directory, so the path is repo-relative.
           path: web/dist
 
   deploy:

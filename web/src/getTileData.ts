@@ -1,6 +1,7 @@
 import type { GetTileDataOptions } from "@developmentseed/deck.gl-geotiff";
 import type { GeoTIFF, Overview } from "@developmentseed/geotiff";
 import type { Texture } from "@luma.gl/core";
+import { reportFailed } from "./loadStats";
 
 async function fetchTileWithRetry(
   image: GeoTIFF | Overview,
@@ -22,6 +23,12 @@ async function fetchTileWithRetry(
     }
   }
   console.error(`[tile] giving up on tile ${x},${y}`, lastErr);
+  // Surface terminal decode failures to the in-panel scoreboard, not just the
+  // console. Aborts (AOI/mode change) are expected churn, not failures.
+  if (!signal?.aborted) {
+    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+    reportFailed(`tile ${x},${y}`, msg);
+  }
   throw lastErr;
 }
 

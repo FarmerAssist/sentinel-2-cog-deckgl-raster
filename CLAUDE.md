@@ -60,8 +60,8 @@ stac.earthgenome.org  ──┐
 
 ```bash
 cd web
-pnpm install        # or npm install
-pnpm dev            # http://localhost:5454
+npm install
+npm run dev         # http://localhost:5455
 ```
 
 No data prebake. Items fetched live from the STAC API.

@@ -6,71 +6,88 @@ import {
 } from "@developmentseed/deck.gl-raster/gpu-modules";
 import type { Texture } from "@luma.gl/core";
 import { discardBoundlessPadding } from "./discardBlack";
-import { NdviFromRG } from "./shaders/ndvi";
+import { NormalizedDifference } from "./shaders/ndvi";
 import { ScaleColor } from "./shaders/scaleColor";
 
-export type RenderMode = "rgb" | "ndvi";
-
-/** Default RGB stretch ceiling in r16unorm units. 0.05 ≈ 3000 raw, TCI-ish. */
-export const DEFAULT_RGB_RESCALE_MAX = 0.05;
-
-export const NDVI_COLORMAPS = ["cividis", "viridis", "plasma"] as const;
-export type NdviColormap = (typeof NDVI_COLORMAPS)[number];
-export const DEFAULT_NDVI_COLORMAP: NdviColormap = "cividis";
-
-/** Default NDVI stretch range — full [-1, 1] maps across the whole colormap. */
-export const DEFAULT_NDVI_RANGE: [number, number] = [-1, 1];
-
-/** Default post-colormap multiplier for NDVI; 1.0 = unchanged, <1 darkens. */
-export const DEFAULT_NDVI_SCALE = 1.0;
+/** Sentinel-2 band assets we pull per item (RGB uses the precomposed TCI). */
+export type BandKey = "B03" | "B04" | "B08" | "B11";
 
 /**
- * Source slot mapping fed to MultiCOGLayer for each mode.
- * Keys become band names; values are the STAC asset keys to pull URLs from.
+ * Curated spectral-index registry (item 4). Every entry is a normalized
+ * difference `(a - b) / (a + b)` so they all share one shader (`NormalizedDifference`)
+ * and the existing MultiCOGLayer composite path — only the two band slots differ.
+ * `a` is packed into color.r, `b` into color.g by the `composite` below.
+ *
+ * Adding a non-normalized-difference index (EVI, SAVI, BSI) means a dedicated
+ * shader + constants; see docs/SPECTRAL_INDICES.md for the generic-formula path.
  */
-export const SOURCE_BANDS: Record<RenderMode, Record<string, "B02" | "B03" | "B04" | "B08">> = {
-  rgb: { red: "B04", green: "B03", blue: "B02" },
-  ndvi: { nir: "B08", red: "B04" },
-};
+export const INDICES = {
+  ndvi: { label: "NDVI", a: "B08", b: "B04", desc: "vegetation" },
+  ndwi: { label: "NDWI", a: "B03", b: "B08", desc: "water" },
+  ndbi: { label: "NDBI", a: "B11", b: "B08", desc: "built-up" },
+  ndmi: { label: "NDMI", a: "B08", b: "B11", desc: "moisture" },
+} as const satisfies Record<string, { label: string; a: BandKey; b: BandKey; desc: string }>;
 
-export const COMPOSITE: Record<RenderMode, { r: string; g?: string; b?: string }> = {
-  rgb: { r: "red", g: "green", b: "blue" },
-  // Pack NIR into color.r and red into color.g for the NDVI shader.
-  ndvi: { r: "nir", g: "red" },
-};
+export type IndexKey = keyof typeof INDICES;
+export const INDEX_KEYS = Object.keys(INDICES) as IndexKey[];
+
+/** "rgb" renders the precomposed TCI via COGLayer; the rest are GPU indices. */
+export type RenderMode = "rgb" | IndexKey;
+
+export function isIndexMode(mode: RenderMode): mode is IndexKey {
+  return mode !== "rgb";
+}
+
+/** Colormaps exposed for index modes — sequential + divergent (all in the sprite). */
+export const INDEX_COLORMAPS = [
+  "cividis",
+  "viridis",
+  "plasma",
+  "rdylgn",
+  "rdbu",
+  "spectral",
+] as const;
+export type IndexColormap = (typeof INDEX_COLORMAPS)[number];
+export const DEFAULT_NDVI_COLORMAP: IndexColormap = "cividis";
+
+/** Default index stretch range — symmetric [-1, 1] centers divergent ramps at 0. */
+export const DEFAULT_NDVI_RANGE: [number, number] = [-1, 1];
+
+/** Default post-colormap multiplier; 1.0 = unchanged, <1 darkens. */
+export const DEFAULT_NDVI_SCALE = 1.0;
+
+/** Back-compat alias used by App's UI. */
+export const NDVI_COLORMAPS = INDEX_COLORMAPS;
+export type NdviColormap = IndexColormap;
+
+/**
+ * MultiCOGLayer `sources` slot → STAC asset map for an index mode. Slot names
+ * (`a`, `b`) are packed into color channels by COMPOSITE below.
+ */
+export function bandSlotsFor(mode: IndexKey): Record<"a" | "b", BandKey> {
+  const { a, b } = INDICES[mode];
+  return { a, b };
+}
+
+/** Composite packing: index input `a`→color.r, `b`→color.g (uniform for all indices). */
+export const INDEX_COMPOSITE = { r: "a", g: "b" } as const;
 
 export function buildRenderPipeline(
   mode: RenderMode,
   colormapTexture: Texture | null,
   opts: {
-    rgbRescaleMax?: number;
-    ndviColormap?: NdviColormap;
+    ndviColormap?: IndexColormap;
     ndviRange?: [number, number];
     ndviScale?: number;
   } = {},
 ): RasterModule[] {
-  if (mode === "rgb") {
-    // MultiCOGLayer uploads uint16 bands as r16unorm → sampler returns
-    // value/65535 in [0,1]. 0.05 ≈ 3000 raw; matches deck.gl-raster
-    // sentinel-2 example. Smaller = brighter.
-    return [
-      { module: discardBoundlessPadding },
-      {
-        module: LinearRescale,
-        props: {
-          rescaleMin: 0,
-          rescaleMax: opts.rgbRescaleMax ?? DEFAULT_RGB_RESCALE_MAX,
-        },
-      },
-    ];
-  }
-  // NDVI
+  if (mode === "rgb") return []; // RGB is handled by COGLayer/renderTile, not here.
   if (!colormapTexture) return [];
-  const [ndviMin, ndviMax] = opts.ndviRange ?? DEFAULT_NDVI_RANGE;
+  const [lo, hi] = opts.ndviRange ?? DEFAULT_NDVI_RANGE;
   return [
     { module: discardBoundlessPadding },
-    { module: NdviFromRG },
-    { module: LinearRescale, props: { rescaleMin: ndviMin, rescaleMax: ndviMax } },
+    { module: NormalizedDifference },
+    { module: LinearRescale, props: { rescaleMin: lo, rescaleMax: hi } },
     {
       module: Colormap,
       props: {
