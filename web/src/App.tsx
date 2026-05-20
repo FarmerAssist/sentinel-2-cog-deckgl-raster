@@ -1,4 +1,5 @@
 import {
+  COGLayer,
   MosaicLayer,
   MultiCOGLayer,
 } from "@developmentseed/deck.gl-geotiff";
@@ -8,40 +9,76 @@ import {
 } from "@developmentseed/deck.gl-raster/gpu-modules";
 import colormapsPngUrl from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png";
 import { epsgResolver } from "@developmentseed/proj";
+import type { GeoTIFF } from "@developmentseed/geotiff";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import type { Device, Texture } from "@luma.gl/core";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Map as MaplibreMap,
+  Marker,
   useControl,
 } from "react-map-gl/maplibre";
 import type { MapRef } from "react-map-gl/maplibre";
 
 import { fetchStacItems, type PartialSTACItem } from "./stac";
+import { resultToBbox, type GeoResult } from "./geocode";
+import { PlaceSearch } from "./PlaceSearch";
+import { loadGeoTIFF } from "./loadGeotiff";
+import { getTileData, type S2TileData } from "./getTileData";
+import { renderTile } from "./renderTile";
 import {
   buildRenderPipeline,
   COMPOSITE,
   DEFAULT_NDVI_COLORMAP,
   DEFAULT_NDVI_RANGE,
   DEFAULT_NDVI_SCALE,
-  DEFAULT_RGB_RESCALE_MAX,
   NDVI_COLORMAPS,
   SOURCE_BANDS,
   type NdviColormap,
   type RenderMode,
 } from "./renderPipeline";
 
+// RGB renders the precomposed 8-bit TCI COG via COGLayer; brightness is a
+// uniform ScaleColor gain (1.0 = faithful TCI), not a raw-band rescale.
+const DEFAULT_RGB_GAIN = 1.0;
+
+/**
+ * Module-level cache of opened TCI GeoTIFFs keyed by URL (mirrors the
+ * deck.gl-raster naip-mosaic example). Header reads are small; the GeoTIFF
+ * instance is reused for the app's lifetime and shared across concurrent
+ * callers via the cached promise. Kept outside MosaicLayer's TileLayer cache
+ * so cheap header metadata isn't pinned to parent-tile lifetime. Uses our
+ * loadGeoTIFF wrapper for the chunkd HEAD-size workaround. Evicts on rejection.
+ */
+const geotiffCache = new Map<string, Promise<GeoTIFF>>();
+function getCachedGeoTIFF(url: string): Promise<GeoTIFF> {
+  let p = geotiffCache.get(url);
+  if (!p) {
+    p = loadGeoTIFF(url).catch((err) => {
+      geotiffCache.delete(url);
+      throw err;
+    });
+    geotiffCache.set(url, p);
+  }
+  return p;
+}
+
 // Years with CORS-open coverage on data.source.coop. The STAC collection
 // advertises 2018–2021 too but those items are hosted on a non-CORS bucket
 // (filtered out by stac.ts CORS_OK_HOSTS).
 const AVAILABLE_YEARS = [2022, 2023, 2024] as const;
 const DEFAULT_YEAR = 2023;
-// Amazon — central/southern basin (~749 CORS-open items; Negro, Madeira,
-// Purus). Big enough to roam; only zooming fully out to frame all of it at
-// once gets heavy (~1500 header opens). The hard cliff is thousands, not this.
-const STAC_BBOX: [number, number, number, number] = [-70.0, -10.0, -50.0, 2.0];
+// Yuma, AZ + margin (lower Colorado River irrigated ag vs Sonoran desert;
+// ~32 CORS-open items in 2023)
+const STAC_BBOX: [number, number, number, number] = [-115.5, 31.5, -113.0, 33.5];
 
+// Items are ANNUAL composites (`YYYY-01-01_YYYY+1-01-01`). A full-year query
+// also matches the adjacent years' annuals at the Jan-1 boundary, so a tile can
+// come back as two overlapping composites. We KEEP that overlap on purpose: a
+// no-data hole (cloud) in one year's composite can be backfilled by the other
+// through the mosaic (discardBlack lets the lower layer show through). Deduping
+// would maximize speed but risk losing coverage.
 function yearToDatetime(year: number): string {
   return `${year}-01-01T00:00:00Z/${year}-12-31T23:59:59Z`;
 }
@@ -88,13 +125,16 @@ export default function App() {
   const [stacError, setStacError] = useState<string | null>(null);
   const [mode, setMode] = useState<RenderMode>("rgb");
   const [year, setYear] = useState<number>(DEFAULT_YEAR);
-  const [rgbRescaleMax, setRgbRescaleMax] = useState<number>(DEFAULT_RGB_RESCALE_MAX);
+  const [rgbGain, setRgbGain] = useState<number>(DEFAULT_RGB_GAIN);
   const [ndviColormap, setNdviColormap] = useState<NdviColormap>(DEFAULT_NDVI_COLORMAP);
   const [ndviRange, setNdviRange] = useState<[number, number]>(DEFAULT_NDVI_RANGE);
   const [ndviScale, setNdviScale] = useState<number>(DEFAULT_NDVI_SCALE);
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapTexture, setColormapTexture] = useState<Texture | null>(null);
   const [labels, setLabels] = useState(false);
+  const [bbox, setBbox] = useState<[number, number, number, number]>(STAC_BBOX);
+  const [marker, setMarker] = useState<{ lng: number; lat: number; label: string } | null>(null);
+  const [showMarker, setShowMarker] = useState(true);
   const stats: LoadStats = { loaded: 0, failed: 0, failures: [] };
 
   const mapStyle = labels
@@ -139,10 +179,17 @@ export default function App() {
     const ac = new AbortController();
     setStacItems([]);
     setStacError(null);
-    fetchStacItems({ datetime: yearToDatetime(year), bbox: STAC_BBOX, signal: ac.signal })
-      .then((items) => {
+    fetchStacItems({ datetime: yearToDatetime(year), bbox, signal: ac.signal })
+      .then(({ items, rejected }) => {
         setStacItems(items);
-        console.info(`[stac] ${items.length} items for ${year}`);
+        console.info(`[stac] ${items.length} items for ${year} (${rejected} CORS-blocked)`);
+        if (items.length === 0) {
+          setStacError(
+            rejected > 0
+              ? `No CORS-open imagery here — ${rejected} item${rejected > 1 ? "s" : ""} exist but are on a CORS-blocked host. Try the Americas or Europe.`
+              : "No imagery for this area/year.",
+          );
+        }
       })
       .catch((err) => {
         if (err.name !== "AbortError") {
@@ -151,16 +198,63 @@ export default function App() {
         }
       });
     return () => ac.abort();
-  }, [year]);
+  }, [year, bbox]);
+
+  const handlePickPlace = (r: GeoResult) => {
+    const bb = resultToBbox(r);
+    setBbox(bb);
+    setMarker({ lng: r.center[0], lat: r.center[1], label: r.label });
+    setShowMarker(true);
+    mapRef.current?.fitBounds(
+      [
+        [bb[0], bb[1]],
+        [bb[2], bb[3]],
+      ],
+      { padding: 40, duration: 1000 },
+    );
+  };
 
   const layers = useMemo(() => {
     if (stacItems.length === 0) return [];
-    if (mode === "ndvi" && !colormapTexture) return [];
+
+    // RGB: render the single precomposed 3-band TCI COG per item through
+    // COGLayer (the deck.gl-raster naip-mosaic pattern). One COG per item, so
+    // no cross-band-file misregistration — this is what kills the seams that
+    // the old MultiCOGLayer (separate B04/B03/B02 files) produced. See
+    // docs/SEAMS.md.
+    if (mode === "rgb") {
+      const mosaic = new MosaicLayer<PartialSTACItem, GeoTIFF>({
+        id: `s2-mosaic-rgb-${gen}`,
+        sources: stacItems,
+        maxCacheSize: 0,
+        getSource: (source) => getCachedGeoTIFF(source.assets.visual.href),
+        renderSource: (source, { data }) =>
+          new COGLayer<S2TileData>({
+            id: `s2-cog-rgb-${gen}-${source.id}`,
+            geotiff: data,
+            epsgResolver,
+            getTileData,
+            renderTile: (tileData: S2TileData) => renderTile(tileData, rgbGain),
+            signal: genSignal,
+            refinementStrategy: "best-available",
+            maxRequests: 16,
+            // ScaleColor gain is closed over rgbGain; retrigger the cached
+            // per-tile renderPipeline when it changes.
+            updateTriggers: { renderTile: [rgbGain] },
+          } as any),
+        // @ts-expect-error beforeId is injected by @deck.gl/mapbox
+        beforeId: labelBeforeId,
+      });
+      return [mosaic];
+    }
+
+    // NDVI: needs the B08/B04 ratio, so keep the MultiCOGLayer composite path.
+    // NDVI is inherently seam-free (the ratio cancels per-edge offsets).
+    if (!colormapTexture) return [];
 
     const bandSlots = SOURCE_BANDS[mode];
     const composite = COMPOSITE[mode];
     const pipeline = buildRenderPipeline(mode, colormapTexture, {
-      rgbRescaleMax,
       ndviColormap,
       ndviRange,
       ndviScale,
@@ -197,17 +291,12 @@ export default function App() {
           // See docs/PERF_KNOBS.md for the full menu + drawbacks.
           refinementStrategy: "best-available",
           maxRequests: 16,
-          // NOTE: RGB shows faint tile-edge seams that NDVI's ratio hides.
-          // Tested maxError:0.01 (tighter reproject mesh) and
-          // refinementStrategy:"no-overlap" (no overview mixing) — neither
-          // fixed it. Root cause is the per-item independent tile grids; see
-          // docs/SEAMS.md.
           // Inner RasterTileLayer caches each tile's renderPipeline result
           // (raster-tile-layer.ts:338 wires renderTile → renderSubLayers).
-          // Without this, brightness/colormap prop changes never reach
-          // already-rendered tiles.
+          // Without this, colormap prop changes never reach already-rendered
+          // tiles.
           updateTriggers: {
-            renderTile: [mode, rgbRescaleMax, ndviColormap, ndviRange[0], ndviRange[1], ndviScale, colormapTexture],
+            renderTile: [mode, ndviColormap, ndviRange[0], ndviRange[1], ndviScale, colormapTexture],
           },
         } as any);
       },
@@ -215,12 +304,12 @@ export default function App() {
       beforeId: labelBeforeId,
     });
     return [mosaic];
-  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, rgbRescaleMax, ndviColormap, ndviRange, ndviScale]);
+  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, rgbGain, ndviColormap, ndviRange, ndviScale]);
 
   const initialViewState = {
-    longitude: -60.0,
-    latitude: -4.0,
-    zoom: 6,
+    longitude: -114.6,
+    latitude: 32.7,
+    zoom: 9,
     pitch: 0,
     bearing: 0,
   };
@@ -249,6 +338,22 @@ export default function App() {
         }}
       >
         <DeckGLOverlay layers={layers} onDevice={setDevice} />
+        {marker && showMarker && (
+          <Marker longitude={marker.lng} latitude={marker.lat} anchor="bottom">
+            <div
+              title={marker.label}
+              style={{
+                width: 14,
+                height: 14,
+                borderRadius: "50% 50% 50% 0",
+                transform: "rotate(-45deg)",
+                background: "#ff4d4f",
+                border: "2px solid white",
+                boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+              }}
+            />
+          </Marker>
+        )}
       </MaplibreMap>
       <InfoPanel
         sourceCount={stacItems.length}
@@ -259,8 +364,8 @@ export default function App() {
         stats={stats}
         mode={mode}
         onModeChange={setMode}
-        rgbRescaleMax={rgbRescaleMax}
-        onRgbRescaleMaxChange={setRgbRescaleMax}
+        rgbGain={rgbGain}
+        onRgbGainChange={setRgbGain}
         ndviColormap={ndviColormap}
         onNdviColormapChange={setNdviColormap}
         ndviRange={ndviRange}
@@ -269,6 +374,10 @@ export default function App() {
         onNdviScaleChange={setNdviScale}
         labels={labels}
         onLabelsChange={setLabels}
+        onPickPlace={handlePickPlace}
+        hasMarker={marker !== null}
+        showMarker={showMarker}
+        onToggleMarker={() => setShowMarker((v) => !v)}
       />
     </div>
   );
@@ -283,8 +392,8 @@ function InfoPanel({
   stats,
   mode,
   onModeChange,
-  rgbRescaleMax,
-  onRgbRescaleMaxChange,
+  rgbGain,
+  onRgbGainChange,
   ndviColormap,
   onNdviColormapChange,
   ndviRange,
@@ -293,6 +402,10 @@ function InfoPanel({
   onNdviScaleChange,
   labels,
   onLabelsChange,
+  onPickPlace,
+  hasMarker,
+  showMarker,
+  onToggleMarker,
 }: {
   sourceCount: number;
   year: number | null;
@@ -302,8 +415,8 @@ function InfoPanel({
   stats: LoadStats;
   mode: RenderMode;
   onModeChange: (m: RenderMode) => void;
-  rgbRescaleMax: number;
-  onRgbRescaleMaxChange: (v: number) => void;
+  rgbGain: number;
+  onRgbGainChange: (v: number) => void;
   ndviColormap: NdviColormap;
   onNdviColormapChange: (c: NdviColormap) => void;
   ndviRange: [number, number];
@@ -312,6 +425,10 @@ function InfoPanel({
   onNdviScaleChange: (s: number) => void;
   labels: boolean;
   onLabelsChange: (v: boolean) => void;
+  onPickPlace: (r: GeoResult) => void;
+  hasMarker: boolean;
+  showMarker: boolean;
+  onToggleMarker: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
@@ -408,6 +525,8 @@ function InfoPanel({
         </select>
       </div>
 
+      <PlaceSearch onPick={onPickPlace} />
+
       <div style={{ opacity: 0.65, fontSize: 11, marginTop: 4 }}>
         {error
           ? `STAC error: ${error}`
@@ -438,7 +557,7 @@ function InfoPanel({
           </button>
         ))}
       </div>
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: 8, display: "flex", gap: 4 }}>
         <button
           type="button"
           onClick={() => onLabelsChange(!labels)}
@@ -455,6 +574,24 @@ function InfoPanel({
         >
           labels {labels ? "on" : "off"}
         </button>
+        {hasMarker && (
+          <button
+            type="button"
+            onClick={onToggleMarker}
+            style={{
+              padding: "4px 10px",
+              fontSize: 11,
+              borderRadius: 3,
+              border: "1px solid rgba(255,255,255,0.3)",
+              background: showMarker ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
+              color: "white",
+              cursor: "pointer",
+              letterSpacing: 0.5,
+            }}
+          >
+            marker {showMarker ? "on" : "off"}
+          </button>
+        )}
       </div>
       {mode === "ndvi" && (
         <div style={{ marginTop: 8, fontSize: 11 }}>
@@ -474,6 +611,7 @@ function InfoPanel({
               const v = Number(e.target.value);
               onNdviRangeChange([Math.min(v, ndviRange[1] - 0.05), ndviRange[1]]);
             }}
+            onDoubleClick={() => onNdviRangeChange([DEFAULT_NDVI_RANGE[0], ndviRange[1]])}
             style={{ width: "100%", marginTop: 2 }}
           />
           <input
@@ -486,6 +624,7 @@ function InfoPanel({
               const v = Number(e.target.value);
               onNdviRangeChange([ndviRange[0], Math.max(v, ndviRange[0] + 0.05)]);
             }}
+            onDoubleClick={() => onNdviRangeChange([ndviRange[0], DEFAULT_NDVI_RANGE[1]])}
             style={{ width: "100%" }}
           />
           <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", opacity: 0.8 }}>
@@ -499,6 +638,7 @@ function InfoPanel({
             step={0.05}
             value={ndviScale}
             onChange={(e) => onNdviScaleChange(Number(e.target.value))}
+            onDoubleClick={() => onNdviScaleChange(DEFAULT_NDVI_SCALE)}
             style={{ width: "100%" }}
           />
         </div>
@@ -534,23 +674,22 @@ function InfoPanel({
         <div style={{ marginTop: 8, fontSize: 11 }}>
           <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.8 }}>
             <span>brightness</span>
-            <span style={{ opacity: 0.6 }}>
-              max {rgbRescaleMax.toFixed(3)}
-            </span>
+            <span style={{ opacity: 0.6 }}>×{rgbGain.toFixed(2)}</span>
           </div>
-          {/* Slider value is the LOG of rescaleMax so the perceptual step is even. */}
+          {/* Uniform RGB gain on the TCI texture (1.0 = faithful). */}
           <input
             type="range"
-            min={-2.5}
-            max={-0.7}
+            min={0.4}
+            max={2.5}
             step={0.05}
-            value={Math.log10(rgbRescaleMax)}
-            onChange={(e) => onRgbRescaleMaxChange(10 ** Number(e.target.value))}
+            value={rgbGain}
+            onChange={(e) => onRgbGainChange(Number(e.target.value))}
+            onDoubleClick={() => onRgbGainChange(DEFAULT_RGB_GAIN)}
             style={{ width: "100%", marginTop: 2 }}
           />
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, opacity: 0.5 }}>
-            <span>brighter</span>
             <span>darker</span>
+            <span>brighter</span>
           </div>
         </div>
       )}
@@ -601,3 +740,4 @@ function InfoPanel({
     </div>
   );
 }
+

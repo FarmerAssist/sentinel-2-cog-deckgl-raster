@@ -61,7 +61,13 @@ export type FetchOptions = {
  * Page through STAC search and project each item down to {id, bbox, visual asset}.
  * TCI is the pre-composed RGB visualization band on this collection.
  */
-export async function fetchStacItems(opts: FetchOptions): Promise<PartialSTACItem[]> {
+export type FetchResult = {
+  items: PartialSTACItem[];
+  /** Items dropped because their COG host isn't CORS-open (can't load in-browser). */
+  rejected: number;
+};
+
+export async function fetchStacItems(opts: FetchOptions): Promise<FetchResult> {
   const { datetime, bbox, maxItems = 5000, signal } = opts;
   const items: PartialSTACItem[] = [];
   const rejectedHosts = new Map<string, number>();
@@ -122,7 +128,9 @@ export async function fetchStacItems(opts: FetchOptions): Promise<PartialSTACIte
     url = next?.href ?? null;
   }
 
+  let rejected = 0;
   if (rejectedHosts.size > 0) {
+    rejected = [...rejectedHosts.values()].reduce((a, b) => a + b, 0);
     const summary = [...rejectedHosts.entries()]
       .map(([h, n]) => `${h} (${n})`)
       .join(", ");
@@ -132,5 +140,5 @@ export async function fetchStacItems(opts: FetchOptions): Promise<PartialSTACIte
     );
   }
 
-  return items;
+  return { items, rejected };
 }
