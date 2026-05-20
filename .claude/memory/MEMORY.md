@@ -111,6 +111,48 @@ Deleted from the CDL inheritance:
 - [ ] Picking — user said deferred. ~50–100 lines using `findSource`
   + re-`fetchTile` pattern from the CDL app.
 
+## Session 2026-05-20 (branch `overview-mosaic` → main)
+
+**RGB seams — actually fixed.** Root cause was NOT "per-item independent tile
+grids" (the prior session's theory; the deck.gl-raster naip-mosaic example
+mosaics many per-item COGLayers seam-free, disproving it). It was
+`MultiCOGLayer` compositing three *separately-tiled single-band* COGs
+(B04/B03/B02) that don't co-register sub-pixel. Fix: render the single
+precomposed 3-band **TCI** COG (`assets.visual`) via one **`COGLayer`** per item
+under `MosaicLayer` — exactly the naip pattern (`getTileData` → `CreateTexture`
++ `discardBlack`). This was the repo's *original* design; the seam appeared when
+RGB was later rerouted through MultiCOGLayer. NDVI stays on MultiCOGLayer
+(needs B08/B04 ratio; already seam-free). The BitmapLayer overview + zoom-gate
+experiment was abandoned (looked worse) and deleted. See `docs/SEAMS.md`.
+
+**RGB brightness** is now a uniform `ScaleColor` gain on the TCI texture
+(`web/src/shaders/scaleColor.ts`, `renderTile.ts`), default ×1.0 — TCI is
+pre-stretched 8-bit so the old raw-band `LinearRescale` no longer applied.
+
+**Place search (Photon, no LLM):** `src/geocode.ts` + `src/PlaceSearch.tsx`.
+Debounced autocomplete, keyboard nav, marker w/ toggle, `resultToBbox` margin +
+clamp. `STAC_BBOX` is now `bbox` state driving the fetch. Coverage: source.coop
+is the only CORS-open host; `fetchStacItems` returns `{items, rejected}` and the
+panel messages when an AOI has zero usable items.
+
+**Data overlap (left intentionally):** items are ANNUAL composites
+(`MGRS_YYYY-01-01_YYYY+1-01-01`). A full-year query also matches the adjacent
+year's annual at the Jan-1 boundary → each tile returns twice (e.g. Yuma: 32
+items / 16 tiles). We KEEP the overlap so a cloud hole in one year backfills via
+the other through discardBlack. (Dedup = nudge datetime to `01-02 → 12-30`, if
+ever wanted for speed.) This is the equivalent of *not* reducing the time axis —
+Earth Genome already did the per-scene `.median(dim=time)` server-side; the only
+remaining "time axis" is *which* annual, a selection not a reduction.
+
+**HMR footgun:** an in-`App.tsx` component (`PlaceSearch`) referenced across the
+`InfoPanel` boundary tripped react-refresh's "X is not defined" on every hot
+update — a false crash that blanked the map and froze the dropdown. Fix: keep
+panel subcomponents in their own files. Hard reload clears a corrupted session.
+
+**Benign console noise:** `AbortError: signal is aborted without reason` from
+deck.gl-geotiff on AOI change = in-flight COG fetches cancelled. Not a failure;
+library-level log, not worth patching.
+
 ## Conduct
 
 Inherits global `~/CLAUDE.md`. No flattery, no unsolicited critique,
