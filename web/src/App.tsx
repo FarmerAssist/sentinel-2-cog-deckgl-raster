@@ -504,9 +504,9 @@ const UI = {
 
 const eyebrowStyle: React.CSSProperties = {
   fontFamily: UI.mono,
-  fontSize: 9,
+  fontSize: 11,
   fontWeight: 600,
-  letterSpacing: "0.16em",
+  letterSpacing: "0.14em",
   textTransform: "uppercase",
   color: UI.faint,
   marginBottom: 8,
@@ -557,10 +557,10 @@ function Toggle({
       title={title}
       style={{
         flex: grow ? 1 : undefined,
-        padding: "4px 10px",
+        padding: "5px 11px",
         fontFamily: UI.mono,
-        fontSize: 10,
-        letterSpacing: "0.06em",
+        fontSize: 12,
+        letterSpacing: "0.04em",
         borderRadius: 4,
         border: `1px solid ${active ? UI.accent : UI.fieldBorder}`,
         background: active ? UI.accentDim : "transparent",
@@ -576,8 +576,8 @@ function Toggle({
 
 const selectStyle: React.CSSProperties = {
   fontFamily: UI.mono,
-  fontSize: 10,
-  padding: "4px 6px",
+  fontSize: 12,
+  padding: "5px 7px",
   background: UI.field,
   border: `1px solid ${UI.fieldBorder}`,
   borderRadius: 4,
@@ -608,7 +608,7 @@ function Slider({
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontFamily: UI.mono, fontSize: 10, color: UI.mute }}>{label}</span>
+        <span style={{ fontFamily: UI.mono, fontSize: 12, color: UI.mute }}>{label}</span>
         {box ?? <NumBox value={value} min={min} max={max} onChange={onChange} />}
       </div>
       <input
@@ -727,8 +727,8 @@ function InfoPanel({
         position: "absolute",
         top: 14,
         left: 14,
-        width: 288,
-        padding: "13px 15px 11px",
+        width: 304,
+        padding: "14px 16px 12px",
         background: "linear-gradient(180deg, rgba(15,19,25,0.9), rgba(10,13,18,0.86))",
         backdropFilter: "blur(14px)",
         WebkitBackdropFilter: "blur(14px)",
@@ -763,9 +763,9 @@ function InfoPanel({
           style={{
             flex: 1,
             fontFamily: UI.mono,
-            fontSize: 11,
+            fontSize: 13,
             fontWeight: 600,
-            letterSpacing: "0.13em",
+            letterSpacing: "0.12em",
             textTransform: "uppercase",
           }}
         >
@@ -790,7 +790,7 @@ function InfoPanel({
         <div
           style={{
             fontFamily: UI.mono,
-            fontSize: 10,
+            fontSize: 11.5,
             color: error ? "#f0a3a3" : UI.mute,
             marginTop: 8,
           }}
@@ -879,7 +879,7 @@ function InfoPanel({
                   display: "flex",
                   justifyContent: "space-between",
                   fontFamily: UI.mono,
-                  fontSize: 9,
+                  fontSize: 11,
                   color: UI.faint,
                   marginTop: 2,
                 }}
@@ -900,7 +900,7 @@ function InfoPanel({
                     justifyContent: "space-between",
                   }}
                 >
-                  <span style={{ fontFamily: UI.mono, fontSize: 10, color: UI.mute }}>
+                  <span style={{ fontFamily: UI.mono, fontSize: 12, color: UI.mute }}>
                     range
                   </span>
                   <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -982,7 +982,7 @@ function InfoPanel({
               <div
                 style={{
                   marginTop: 8,
-                  fontSize: 9,
+                  fontSize: 11,
                   lineHeight: 1.5,
                   color: UI.faint,
                 }}
@@ -1006,7 +1006,7 @@ function InfoPanel({
                 alignItems: "center",
                 gap: 8,
                 fontFamily: UI.mono,
-                fontSize: 10,
+                fontSize: 12,
                 color: "#f0a3a3",
               }}
             >
@@ -1019,8 +1019,8 @@ function InfoPanel({
                 }}
                 style={{
                   fontFamily: UI.mono,
-                  fontSize: 9,
-                  padding: "2px 7px",
+                  fontSize: 11,
+                  padding: "2px 8px",
                   background: UI.field,
                   color: UI.text,
                   border: `1px solid ${UI.fieldBorder}`,
@@ -1046,7 +1046,7 @@ function InfoPanel({
                   <code
                     style={{
                       fontFamily: UI.mono,
-                      fontSize: 9,
+                      fontSize: 10.5,
                       color: UI.mute,
                       userSelect: "all",
                       WebkitUserSelect: "all",
@@ -1069,7 +1069,7 @@ function InfoPanel({
           paddingTop: 11,
           borderTop: `1px solid ${UI.hairline}`,
           fontFamily: UI.mono,
-          fontSize: 9,
+          fontSize: 11,
           lineHeight: 1.6,
         }}
       >
@@ -1097,7 +1097,7 @@ function InfoPanel({
               textDecoration: "none",
             }}
           >
-            <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true">
               <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
             </svg>
             View source
@@ -1164,10 +1164,10 @@ function NumBox({
         if (e.key === "Enter") (e.target as HTMLInputElement).blur();
       }}
       style={{
-        width: 52,
+        width: 56,
         fontFamily: UI.mono,
-        fontSize: 10,
-        padding: "2px 5px",
+        fontSize: 12,
+        padding: "3px 6px",
         textAlign: "right",
         background: UI.field,
         border: `1px solid ${UI.fieldBorder}`,

@@ -67,6 +67,9 @@ export const PlaceSearch = forwardRef<HTMLInputElement, { onPick: (r: GeoResult)
     setResults([]);
     setOpen(false);
     setActive(-1);
+    // Release focus so map keyboard shortcuts (M, L, D…) work immediately
+    // without a click. `/` refocuses the box to edit again.
+    inputRef.current?.blur();
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
