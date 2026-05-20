@@ -31,6 +31,11 @@ import {
   type StatsSnapshot,
 } from "./loadStats";
 import { resultToBbox, type GeoResult } from "./geocode";
+import {
+  appendCartoColormaps,
+  buildColormapStripe,
+  isCartoColormap,
+} from "./cartoColormaps";
 import { PlaceSearch } from "./PlaceSearch";
 import { loadGeoTIFF } from "./loadGeotiff";
 import { getTileData, type S2TileData } from "./getTileData";
@@ -144,6 +149,9 @@ export default function App() {
   const [ndviReversed, setNdviReversed] = useState<boolean>(false);
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapTexture, setColormapTexture] = useState<Texture | null>(null);
+  // name → row index in the CARTO-augmented colormap texture. Populated once the
+  // sprite decodes; CARTO names resolve to rows appended past the shipped sprite.
+  const [colormapIndexMap, setColormapIndexMap] = useState<Record<string, number>>({});
   const [labels, setLabels] = useState(false);
   const [bbox, setBbox] = useState<[number, number, number, number]>(STAC_BBOX);
   const [marker, setMarker] = useState<{ lng: number; lat: number; label: string } | null>(null);
@@ -159,11 +167,6 @@ export default function App() {
   // handler). `/` focuses search, `m` marker, `l` labels, `d` draw AOI.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setDrawing(false);
-        setShowMarker(false);
-        return;
-      }
       const t = e.target as HTMLElement | null;
       const typing =
         !!t &&
@@ -221,7 +224,11 @@ export default function App() {
         const bytes = await resp.arrayBuffer();
         const image = await decodeColormapSprite(bytes);
         if (cancelled) return;
-        setColormapTexture(createColormapTexture(device, image));
+        // Append CARTOColors rows, then upload the combined texture. The CARTO
+        // names resolve to row indices past the shipped sprite's 107 rows.
+        const { image: merged, index: cartoIndex } = appendCartoColormaps(image);
+        setColormapIndexMap({ ...COLORMAP_INDEX, ...cartoIndex });
+        setColormapTexture(createColormapTexture(device, merged));
       } catch (err) {
         console.error("[colormap] failed to load sprite:", err);
       }
@@ -269,11 +276,10 @@ export default function App() {
   }, [year, bbox]);
 
   // Box drawn on the map (item 5): the [W,S,E,N] becomes the new STAC AOI,
-  // mirroring lonboard's `selected_bounds`. Drops a marker at the box center.
+  // mirroring lonboard's `selected_bounds`. No marker — the box is its own cue.
   const handleDrawBox = (bb: [number, number, number, number]) => {
     setBbox(bb);
-    setMarker({ lng: (bb[0] + bb[2]) / 2, lat: (bb[1] + bb[3]) / 2, label: "drawn AOI" });
-    setShowMarker(true);
+    setMarker(null);
     setDrawing(false);
   };
 
@@ -346,6 +352,7 @@ export default function App() {
     const composite = INDEX_COMPOSITE;
     const pipeline = buildRenderPipeline(mode, colormapTexture, {
       ndviColormap,
+      colormapIndex: colormapIndexMap[ndviColormap],
       ndviRange,
       ndviScale,
       ndviReversed,
@@ -395,7 +402,7 @@ export default function App() {
       beforeId: labelBeforeId,
     });
     return [mosaic];
-  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed]);
+  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, colormapIndexMap, rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed]);
 
   const initialViewState = {
     longitude: -114.6,
@@ -1077,8 +1084,7 @@ function InfoPanel({
           <span style={{ color: UI.mute }}>/</span> search&nbsp;&nbsp;
           <span style={{ color: UI.mute }}>M</span> marker&nbsp;&nbsp;
           <span style={{ color: UI.mute }}>L</span> labels&nbsp;&nbsp;
-          <span style={{ color: UI.mute }}>D</span> draw&nbsp;&nbsp;
-          <span style={{ color: UI.mute }}>Esc</span> clear
+          <span style={{ color: UI.mute }}>D</span> draw
         </div>
         <div style={{ color: UI.faint, marginTop: 4 }}>
           Stale or blank? Hard-reload (⌘⇧R / Ctrl+Shift+R).
@@ -1222,10 +1228,32 @@ function ColormapBar({ name, reversed }: { name: NdviColormap; reversed: boolean
     const canvas = ref.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // CARTO palettes aren't in the sprite PNG — paint them straight from the
+    // interpolated 256-px stripe so the bar matches what the texture renders.
+    if (isCartoColormap(name)) {
+      const stripe = buildColormapStripe(name);
+      const off = new OffscreenCanvas(256, 1);
+      const offCtx = off.getContext("2d")!;
+      const src = offCtx.createImageData(256, 1);
+      src.data.set(stripe);
+      offCtx.putImageData(src, 0, 0);
+      ctx.save();
+      if (reversed) {
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+      }
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(off, 0, 0, 256, 1, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
+      return;
+    }
+
     const img = new Image();
     img.src = colormapsPngUrl;
     img.onload = () => {
-      const row = COLORMAP_INDEX[name];
+      const row = COLORMAP_INDEX[name as keyof typeof COLORMAP_INDEX];
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
       if (reversed) {

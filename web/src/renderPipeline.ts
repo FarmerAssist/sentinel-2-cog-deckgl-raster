@@ -39,14 +39,23 @@ export function isIndexMode(mode: RenderMode): mode is IndexKey {
   return mode !== "rgb";
 }
 
-/** Colormaps exposed for index modes — sequential + divergent (all in the sprite). */
+/**
+ * Colormaps exposed for index modes. Deuteranopia-friendly set: the red-green
+ * ramps (rdylgn, spectral) were dropped because they're indistinguishable to
+ * red-green colorblind viewers. cividis/viridis/plasma are perceptually uniform
+ * and colorblind-safe; rdbu is a blue-red divergent (safe — the confusion axis
+ * is red-green, not red-blue); emrld/earth/geyser are CARTOColors injected via
+ * cartoColormaps.ts (not in the shipped sprite).
+ */
 export const INDEX_COLORMAPS = [
   "cividis",
   "viridis",
   "plasma",
-  "rdylgn",
   "rdbu",
-  "spectral",
+  "emrld",
+  "earth",
+  "geyser",
+  "sunset",
 ] as const;
 export type IndexColormap = (typeof INDEX_COLORMAPS)[number];
 export const DEFAULT_NDVI_COLORMAP: IndexColormap = "cividis";
@@ -78,6 +87,9 @@ export function buildRenderPipeline(
   colormapTexture: Texture | null,
   opts: {
     ndviColormap?: IndexColormap;
+    // Resolved row index in the (possibly CARTO-augmented) colormap texture.
+    // Falls back to the shipped sprite's COLORMAP_INDEX when omitted.
+    colormapIndex?: number;
     ndviRange?: [number, number];
     ndviScale?: number;
     ndviReversed?: boolean;
@@ -94,7 +106,9 @@ export function buildRenderPipeline(
       module: Colormap,
       props: {
         colormapTexture,
-        colormapIndex: COLORMAP_INDEX[opts.ndviColormap ?? DEFAULT_NDVI_COLORMAP],
+        colormapIndex:
+          opts.colormapIndex ??
+          COLORMAP_INDEX[(opts.ndviColormap ?? DEFAULT_NDVI_COLORMAP) as keyof typeof COLORMAP_INDEX],
         reversed: opts.ndviReversed ?? false,
       },
     },

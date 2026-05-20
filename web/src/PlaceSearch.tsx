@@ -85,7 +85,16 @@ export const PlaceSearch = forwardRef<HTMLInputElement, { onPick: (r: GeoResult)
       const pick = active >= 0 ? results[active] : results[0];
       if (pick) choose(pick);
     } else if (e.key === "Escape") {
-      setOpen(false);
+      // First Esc on an open dropdown just dismisses it; a second Esc (or Esc
+      // on a filled box) clears the text. Then release focus.
+      if (open && results.length > 0) {
+        setOpen(false);
+      } else {
+        skipSearch.current = true;
+        setQ("");
+        setResults([]);
+        setActive(-1);
+      }
       (e.target as HTMLInputElement).blur();
     }
   };
@@ -113,35 +122,36 @@ export const PlaceSearch = forwardRef<HTMLInputElement, { onPick: (r: GeoResult)
           outline: "none",
         }}
       />
-      {busy ? (
-        <span style={{ position: "absolute", right: 8, top: 6, fontSize: 10, opacity: 0.5 }}>
+      {/* Spinner sits left of the × so an in-flight search never hides the
+          clear control — you can always bail out of a filled box. */}
+      {busy && (
+        <span style={{ position: "absolute", right: 26, top: 6, fontSize: 10, opacity: 0.5 }}>
           …
         </span>
-      ) : (
-        q.length > 0 && (
-          <button
-            type="button"
-            aria-label="clear search"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={clear}
-            style={{
-              position: "absolute",
-              right: 4,
-              top: 3,
-              width: 18,
-              height: 18,
-              padding: 0,
-              lineHeight: "16px",
-              fontSize: 13,
-              background: "transparent",
-              border: "none",
-              color: "rgba(255,255,255,0.55)",
-              cursor: "pointer",
-            }}
-          >
-            ×
-          </button>
-        )
+      )}
+      {q.length > 0 && (
+        <button
+          type="button"
+          aria-label="clear search"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={clear}
+          style={{
+            position: "absolute",
+            right: 4,
+            top: 3,
+            width: 18,
+            height: 18,
+            padding: 0,
+            lineHeight: "16px",
+            fontSize: 13,
+            background: "transparent",
+            border: "none",
+            color: "rgba(255,255,255,0.55)",
+            cursor: "pointer",
+          }}
+        >
+          ×
+        </button>
       )}
       {open && results.length > 0 && (
         <ul
