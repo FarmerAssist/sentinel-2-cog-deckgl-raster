@@ -2,6 +2,22 @@
 
 ## Done
 
+- **Spectral-index suite + panel redesign (2026-05-20, session 3).** Curated
+  normalized-difference indices (NDVI/NDWI/NDBI/NDMI) via one shared
+  `NormalizedDifference` shader + `INDICES` registry; divergent colormaps
+  (rdylgn/rdbu/spectral) and a reverse toggle; editable slider values and a
+  live colormap reference bar. CI moved pnpm→npm. Live load scoreboard
+  (`loadStats.ts`) replacing the dead `stats` local. Lightweight draw-AOI
+  box-select + debounced STAC refetch. Search clear (×). Panel restyled as a
+  sectioned "instrument" surface (AREA / RENDER card / DIAGNOSTICS / footer),
+  IBM Plex Mono, teal accent. Footer credits split so the GitHub repo link
+  (yours) reads separately from the "built with deck.gl-raster by Development
+  Seed" provenance. Keyboard shortcuts (`/ M L D Esc`) with the marker as
+  transient context (auto-hide on user pan/zoom, `M` to summon). Customization
+  guide at `docs/CUSTOMIZE.md`; index-catalog roadmap at
+  `docs/SPECTRAL_INDICES.md`.
+
+
 - **RGB seams fixed (2026-05-20).** RGB renders the single TCI COG per item via
   `COGLayer` (naip-mosaic pattern); see `docs/SEAMS.md` → "RESOLVED". The
   BitmapLayer overview mode + zoom-gate were dropped (looked worse, still

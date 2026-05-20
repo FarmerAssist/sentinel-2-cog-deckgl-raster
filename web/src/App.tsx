@@ -4,6 +4,7 @@ import {
   MultiCOGLayer,
 } from "@developmentseed/deck.gl-geotiff";
 import {
+  COLORMAP_INDEX,
   createColormapTexture,
   decodeColormapSprite,
 } from "@developmentseed/deck.gl-raster/gpu-modules";
@@ -116,6 +117,7 @@ function DeckGLOverlay({
 
 export default function App() {
   const mapRef = useRef<MapRef>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   // Cache MultiCOGLayer `sources` records per (mode, source.id) so the SAME
   // object reference is reused across brightness / colormap changes. MultiCOG
   // checks `props.sources !== oldProps.sources` (multi-cog-layer.ts:309) and
@@ -139,6 +141,7 @@ export default function App() {
   const [ndviColormap, setNdviColormap] = useState<NdviColormap>(DEFAULT_NDVI_COLORMAP);
   const [ndviRange, setNdviRange] = useState<[number, number]>(DEFAULT_NDVI_RANGE);
   const [ndviScale, setNdviScale] = useState<number>(DEFAULT_NDVI_SCALE);
+  const [ndviReversed, setNdviReversed] = useState<boolean>(false);
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapTexture, setColormapTexture] = useState<Texture | null>(null);
   const [labels, setLabels] = useState(false);
@@ -150,6 +153,45 @@ export default function App() {
 
   // Mirror the module-level load scoreboard into React state.
   useEffect(() => subscribeStats(setStats), []);
+
+  // Keyboard shortcuts (core set). Letter keys are ignored while typing in an
+  // input/select; Esc works everywhere (also blurs/clears via the field's own
+  // handler). `/` focuses search, `m` marker, `l` labels, `d` draw AOI.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setDrawing(false);
+        setShowMarker(false);
+        return;
+      }
+      const t = e.target as HTMLElement | null;
+      const typing =
+        !!t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable);
+      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      switch (e.key.toLowerCase()) {
+        case "/":
+          e.preventDefault();
+          searchRef.current?.focus();
+          break;
+        case "m":
+          // Summon/hide the marker — only meaningful once one exists.
+          setShowMarker((v) => (marker ? !v : v));
+          break;
+        case "l":
+          setLabels((v) => !v);
+          break;
+        case "d":
+          setDrawing((v) => !v);
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [marker]);
 
   const mapStyle = labels
     ? "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
@@ -306,6 +348,7 @@ export default function App() {
       ndviColormap,
       ndviRange,
       ndviScale,
+      ndviReversed,
     });
 
     const mosaic = new MosaicLayer<PartialSTACItem, null>({
@@ -344,7 +387,7 @@ export default function App() {
           // Without this, colormap prop changes never reach already-rendered
           // tiles.
           updateTriggers: {
-            renderTile: [mode, ndviColormap, ndviRange[0], ndviRange[1], ndviScale, colormapTexture],
+            renderTile: [mode, ndviColormap, ndviRange[0], ndviRange[1], ndviScale, ndviReversed, colormapTexture],
           },
         } as any);
       },
@@ -352,7 +395,7 @@ export default function App() {
       beforeId: labelBeforeId,
     });
     return [mosaic];
-  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, rgbGain, ndviColormap, ndviRange, ndviScale]);
+  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed]);
 
   const initialViewState = {
     longitude: -114.6,
@@ -382,6 +425,12 @@ export default function App() {
             const layers = map.getStyle()?.layers ?? [];
             const sym = layers.find((l: any) => l.type === "symbol");
             setLabelBeforeId(sym?.id);
+          });
+          // Marker is transient orientation context: auto-hide it the moment
+          // the user pans/zooms. `e.originalEvent` is set only for user-driven
+          // moves, so our programmatic flyTo (on search) doesn't dismiss it.
+          map.on("movestart", (ev: any) => {
+            if (ev.originalEvent) setShowMarker(false);
           });
         }}
       >
@@ -421,14 +470,156 @@ export default function App() {
         onNdviRangeChange={setNdviRange}
         ndviScale={ndviScale}
         onNdviScaleChange={setNdviScale}
+        ndviReversed={ndviReversed}
+        onNdviReversedChange={setNdviReversed}
         labels={labels}
         onLabelsChange={setLabels}
         onPickPlace={handlePickPlace}
+        searchRef={searchRef}
         hasMarker={marker !== null}
         showMarker={showMarker}
         onToggleMarker={() => setShowMarker((v) => !v)}
         drawing={drawing}
         onToggleDraw={() => setDrawing((v) => !v)}
+      />
+    </div>
+  );
+}
+
+// ── Instrument-panel design tokens ─────────────────────────────────────────
+// A refined dark "satellite readout" surface: glass background, hairline
+// section rules, a single spectral-teal accent for active/interactive state,
+// and IBM Plex Mono for the technical labels/values.
+const UI = {
+  accent: "#7dd3c0",
+  accentDim: "rgba(125,211,192,0.16)",
+  text: "rgba(236,242,240,0.92)",
+  mute: "rgba(236,242,240,0.5)",
+  faint: "rgba(236,242,240,0.34)",
+  hairline: "rgba(255,255,255,0.09)",
+  field: "rgba(255,255,255,0.06)",
+  fieldBorder: "rgba(255,255,255,0.16)",
+  mono: '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace',
+} as const;
+
+const eyebrowStyle: React.CSSProperties = {
+  fontFamily: UI.mono,
+  fontSize: 9,
+  fontWeight: 600,
+  letterSpacing: "0.16em",
+  textTransform: "uppercase",
+  color: UI.faint,
+  marginBottom: 8,
+};
+
+/** A grouped block with a quiet uppercase eyebrow label and a top hairline. */
+function Section({
+  label,
+  children,
+  first,
+}: {
+  label: string;
+  children: React.ReactNode;
+  first?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        marginTop: first ? 12 : 14,
+        paddingTop: first ? 0 : 12,
+        borderTop: first ? "none" : `1px solid ${UI.hairline}`,
+      }}
+    >
+      <div style={eyebrowStyle}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+/** Consistent pill toggle; accent fill when active. */
+function Toggle({
+  active,
+  onClick,
+  children,
+  title,
+  grow,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  title?: string;
+  grow?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      style={{
+        flex: grow ? 1 : undefined,
+        padding: "4px 10px",
+        fontFamily: UI.mono,
+        fontSize: 10,
+        letterSpacing: "0.06em",
+        borderRadius: 4,
+        border: `1px solid ${active ? UI.accent : UI.fieldBorder}`,
+        background: active ? UI.accentDim : "transparent",
+        color: active ? UI.accent : UI.text,
+        cursor: "pointer",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+const selectStyle: React.CSSProperties = {
+  fontFamily: UI.mono,
+  fontSize: 10,
+  padding: "4px 6px",
+  background: UI.field,
+  border: `1px solid ${UI.fieldBorder}`,
+  borderRadius: 4,
+  color: UI.text,
+  cursor: "pointer",
+};
+
+/** Labelled slider with an editable NumBox header. */
+function Slider({
+  label,
+  value,
+  min,
+  max,
+  step = 0.05,
+  onChange,
+  onReset,
+  box,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (v: number) => void;
+  onReset?: () => void;
+  box?: React.ReactNode;
+}) {
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontFamily: UI.mono, fontSize: 10, color: UI.mute }}>{label}</span>
+        {box ?? <NumBox value={value} min={min} max={max} onChange={onChange} />}
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        onDoubleClick={onReset}
+        style={{ width: "100%", marginTop: 4, accentColor: UI.accent }}
       />
     </div>
   );
@@ -451,9 +642,12 @@ function InfoPanel({
   onNdviRangeChange,
   ndviScale,
   onNdviScaleChange,
+  ndviReversed,
+  onNdviReversedChange,
   labels,
   onLabelsChange,
   onPickPlace,
+  searchRef,
   hasMarker,
   showMarker,
   onToggleMarker,
@@ -476,9 +670,12 @@ function InfoPanel({
   onNdviRangeChange: (r: [number, number]) => void;
   ndviScale: number;
   onNdviScaleChange: (s: number) => void;
+  ndviReversed: boolean;
+  onNdviReversedChange: (v: boolean) => void;
   labels: boolean;
   onLabelsChange: (v: boolean) => void;
   onPickPlace: (r: GeoResult) => void;
+  searchRef: React.Ref<HTMLInputElement>;
   hasMarker: boolean;
   showMarker: boolean;
   onToggleMarker: () => void;
@@ -500,19 +697,21 @@ function InfoPanel({
         onMouseDown={(e) => e.stopPropagation()}
         style={{
           position: "absolute",
-          top: 12,
-          left: 12,
-          width: 28,
-          height: 28,
+          top: 14,
+          left: 14,
+          width: 30,
+          height: 30,
           padding: 0,
-          background: "rgba(0,0,0,0.55)",
-          color: "white",
-          border: "1px solid rgba(255,255,255,0.2)",
-          borderRadius: 4,
+          background: "linear-gradient(180deg, rgba(15,19,25,0.9), rgba(10,13,18,0.86))",
+          backdropFilter: "blur(14px)",
+          WebkitBackdropFilter: "blur(14px)",
+          color: UI.accent,
+          border: `1px solid ${UI.hairline}`,
+          borderRadius: 8,
           cursor: "pointer",
-          fontSize: 14,
-          lineHeight: "26px",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+          fontSize: 13,
+          lineHeight: "28px",
+          boxShadow: "0 10px 34px rgba(0,0,0,0.5)",
         }}
       >
         ▸
@@ -526,318 +725,500 @@ function InfoPanel({
       onDoubleClick={(e) => e.stopPropagation()}
       style={{
         position: "absolute",
-        top: 12,
-        left: 12,
-        padding: "10px 14px",
-        background: "rgba(0,0,0,0.78)",
-        color: "white",
+        top: 14,
+        left: 14,
+        width: 288,
+        padding: "13px 15px 11px",
+        background: "linear-gradient(180deg, rgba(15,19,25,0.9), rgba(10,13,18,0.86))",
+        backdropFilter: "blur(14px)",
+        WebkitBackdropFilter: "blur(14px)",
+        border: `1px solid ${UI.hairline}`,
+        borderRadius: 10,
+        boxShadow: "0 10px 34px rgba(0,0,0,0.5)",
+        color: UI.text,
         fontSize: 12,
-        borderRadius: 6,
-        boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-        maxWidth: 480,
         userSelect: "text",
         WebkitUserSelect: "text",
       }}
     >
-      <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 8 }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button
           type="button"
           onClick={() => setCollapsed((c) => !c)}
-          aria-label={collapsed ? "expand" : "collapse"}
+          aria-label="collapse"
           style={{
             background: "transparent",
             border: "none",
-            color: "white",
+            color: UI.mute,
             cursor: "pointer",
             padding: 0,
-            fontSize: 12,
-            opacity: 0.7,
-            width: 14,
+            fontSize: 11,
+            width: 12,
           }}
         >
-          {collapsed ? "▸" : "▾"}
+          ▾
         </button>
-        Sentinel-2 Temporal Mosaic
+        <div
+          style={{
+            flex: 1,
+            fontFamily: UI.mono,
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: "0.13em",
+            textTransform: "uppercase",
+          }}
+        >
+          Sentinel-2 <span style={{ color: UI.accent }}>Mosaic</span>
+        </div>
         <select
           value={year ?? ""}
           onChange={(e) => onYearChange(Number(e.target.value))}
-          style={{
-            fontSize: 11,
-            fontWeight: 500,
-            padding: "2px 6px",
-            background: "rgba(255,255,255,0.12)",
-            border: "1px solid rgba(255,255,255,0.2)",
-            borderRadius: 3,
-            color: "white",
-            cursor: "pointer",
-          }}
+          style={selectStyle}
         >
           {availableYears.map((y) => (
-            <option key={y} value={y} style={{ background: "#222" }}>
+            <option key={y} value={y} style={{ background: "#15191f" }}>
               {y}
             </option>
           ))}
         </select>
       </div>
 
-      <PlaceSearch onPick={onPickPlace} />
+      {/* Area: search, coverage status, view toggles */}
+      <Section label="Area" first>
+        <PlaceSearch ref={searchRef} onPick={onPickPlace} />
+        <div
+          style={{
+            fontFamily: UI.mono,
+            fontSize: 10,
+            color: error ? "#f0a3a3" : UI.mute,
+            marginTop: 8,
+          }}
+        >
+          {error
+            ? `STAC error: ${error}`
+            : sourceCount === 0
+              ? "loading STAC items…"
+              : `${sourceCount} sources · ${stats.loaded} loaded · ${stats.failed} failed · ${pending} pending`}
+        </div>
+        <div style={{ marginTop: 9, display: "flex", flexWrap: "wrap", gap: 6 }}>
+          <Toggle
+            active={drawing}
+            onClick={onToggleDraw}
+            title="Drag a rectangle on the map to set the area of interest"
+          >
+            {drawing ? "DRAW: DRAG BOX" : "DRAW AOI"}
+          </Toggle>
+          <Toggle active={labels} onClick={() => onLabelsChange(!labels)}>
+            LABELS {labels ? "ON" : "OFF"}
+          </Toggle>
+          {hasMarker && (
+            <Toggle active={showMarker} onClick={onToggleMarker}>
+              MARKER {showMarker ? "ON" : "OFF"}
+            </Toggle>
+          )}
+        </div>
+      </Section>
 
-      <div style={{ opacity: 0.65, fontSize: 11, marginTop: 4 }}>
-        {error
-          ? `STAC error: ${error}`
-          : sourceCount === 0
-            ? "loading STAC items…"
-            : `${sourceCount} sources · ${stats.loaded} loaded · ${stats.failed} failed · ${pending} pending`}
-      </div>
-      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6 }}>
-        <button
-          type="button"
-          onClick={() => onModeChange("rgb")}
-          style={{
-            padding: "4px 10px",
-            fontSize: 11,
-            borderRadius: 3,
-            border: "1px solid rgba(255,255,255,0.3)",
-            background: mode === "rgb" ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
-            color: "white",
-            cursor: "pointer",
-            textTransform: "uppercase",
-            letterSpacing: 0.5,
-          }}
-        >
-          RGB (TCI)
-        </button>
-        <span style={{ opacity: 0.4, fontSize: 11 }}>or index</span>
-        <select
-          value={isIndexMode(mode) ? mode : ""}
-          onChange={(e) => onModeChange(e.target.value as RenderMode)}
-          style={{
-            fontSize: 11,
-            padding: "3px 6px",
-            background: "rgba(255,255,255,0.12)",
-            border: "1px solid rgba(255,255,255,0.2)",
-            borderRadius: 3,
-            color: "white",
-            cursor: "pointer",
-          }}
-        >
-          <option value="" disabled style={{ background: "#222" }}>
-            choose…
-          </option>
-          {INDEX_KEYS.map((k) => (
-            <option key={k} value={k} style={{ background: "#222" }}>
-              {INDICES[k].label} · {INDICES[k].desc}
+      {/* Render: mode selector + a bounded card for the active mode's params */}
+      <Section label="Render">
+        <div style={{ display: "flex", gap: 6 }}>
+          <Toggle active={mode === "rgb"} onClick={() => onModeChange("rgb")}>
+            RGB
+          </Toggle>
+          <select
+            value={isIndexMode(mode) ? mode : ""}
+            onChange={(e) => onModeChange(e.target.value as RenderMode)}
+            style={{ ...selectStyle, flex: 1, textTransform: "uppercase" }}
+          >
+            <option value="" disabled style={{ background: "#15191f" }}>
+              spectral index…
             </option>
-          ))}
-        </select>
-      </div>
-      <div style={{ marginTop: 8, display: "flex", gap: 4 }}>
-        <button
-          type="button"
-          onClick={() => onLabelsChange(!labels)}
-          style={{
-            padding: "4px 10px",
-            fontSize: 11,
-            borderRadius: 3,
-            border: "1px solid rgba(255,255,255,0.3)",
-            background: labels ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
-            color: "white",
-            cursor: "pointer",
-            letterSpacing: 0.5,
-          }}
-        >
-          labels {labels ? "on" : "off"}
-        </button>
-        <button
-          type="button"
-          onClick={onToggleDraw}
-          title="Drag a rectangle on the map to set the area of interest"
-          style={{
-            padding: "4px 10px",
-            fontSize: 11,
-            borderRadius: 3,
-            border: "1px solid rgba(255,255,255,0.3)",
-            background: drawing ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
-            color: "white",
-            cursor: "pointer",
-            letterSpacing: 0.5,
-          }}
-        >
-          {drawing ? "draw: drag a box…" : "draw AOI"}
-        </button>
-        {hasMarker && (
-          <button
-            type="button"
-            onClick={onToggleMarker}
-            style={{
-              padding: "4px 10px",
-              fontSize: 11,
-              borderRadius: 3,
-              border: "1px solid rgba(255,255,255,0.3)",
-              background: showMarker ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
-              color: "white",
-              cursor: "pointer",
-              letterSpacing: 0.5,
-            }}
-          >
-            marker {showMarker ? "on" : "off"}
-          </button>
-        )}
-      </div>
-      {isIndexMode(mode) && (
-        <div style={{ marginTop: 8, fontSize: 11 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.8 }}>
-            <span>index range</span>
-            <span style={{ opacity: 0.6 }}>
-              {ndviRange[0].toFixed(2)} → {ndviRange[1].toFixed(2)}
-            </span>
-          </div>
-          <input
-            type="range"
-            min={-1}
-            max={1}
-            step={0.05}
-            value={ndviRange[0]}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              onNdviRangeChange([Math.min(v, ndviRange[1] - 0.05), ndviRange[1]]);
-            }}
-            onDoubleClick={() => onNdviRangeChange([DEFAULT_NDVI_RANGE[0], ndviRange[1]])}
-            style={{ width: "100%", marginTop: 2 }}
-          />
-          <input
-            type="range"
-            min={-1}
-            max={1}
-            step={0.05}
-            value={ndviRange[1]}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              onNdviRangeChange([ndviRange[0], Math.max(v, ndviRange[0] + 0.05)]);
-            }}
-            onDoubleClick={() => onNdviRangeChange([ndviRange[0], DEFAULT_NDVI_RANGE[1]])}
-            style={{ width: "100%" }}
-          />
-          <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", opacity: 0.8 }}>
-            <span>darken</span>
-            <span style={{ opacity: 0.6 }}>×{ndviScale.toFixed(2)}</span>
-          </div>
-          <input
-            type="range"
-            min={0.2}
-            max={1.5}
-            step={0.05}
-            value={ndviScale}
-            onChange={(e) => onNdviScaleChange(Number(e.target.value))}
-            onDoubleClick={() => onNdviScaleChange(DEFAULT_NDVI_SCALE)}
-            style={{ width: "100%" }}
-          />
-        </div>
-      )}
-      {isIndexMode(mode) && (
-        <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 4 }}>
-          {NDVI_COLORMAPS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => onNdviColormapChange(c)}
-              style={{
-                padding: "3px 8px",
-                fontSize: 10,
-                borderRadius: 3,
-                border: "1px solid rgba(255,255,255,0.3)",
-                background:
-                  ndviColormap === c
-                    ? "rgba(255,255,255,0.25)"
-                    : "rgba(255,255,255,0.05)",
-                color: "white",
-                cursor: "pointer",
-                textTransform: "uppercase",
-                letterSpacing: 0.5,
-              }}
-            >
-              {c}
-            </button>
-          ))}
-        </div>
-      )}
-      {isIndexMode(mode) && (
-        <div style={{ marginTop: 6, fontSize: 10, opacity: 0.45 }}>
-          Indices use Earth Genome's public Sentinel-2 bands. Productionizing
-          against Satellogic imagery needs their band/asset conventions + auth.
-        </div>
-      )}
-      {mode === "rgb" && (
-        <div style={{ marginTop: 8, fontSize: 11 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.8 }}>
-            <span>brightness</span>
-            <span style={{ opacity: 0.6 }}>×{rgbGain.toFixed(2)}</span>
-          </div>
-          {/* Uniform RGB gain on the TCI texture (1.0 = faithful). */}
-          <input
-            type="range"
-            min={0.4}
-            max={2.5}
-            step={0.05}
-            value={rgbGain}
-            onChange={(e) => onRgbGainChange(Number(e.target.value))}
-            onDoubleClick={() => onRgbGainChange(DEFAULT_RGB_GAIN)}
-            style={{ width: "100%", marginTop: 2 }}
-          />
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, opacity: 0.5 }}>
-            <span>darker</span>
-            <span>brighter</span>
-          </div>
-        </div>
-      )}
-      {stats.failures.length > 0 && (
-        <details open style={{ marginTop: 6, fontSize: 11 }}>
-          <summary style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
-            <span>{stats.failures.length} failed</span>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                copyFailures();
-              }}
-              style={{
-                fontSize: 10,
-                padding: "2px 6px",
-                background: "rgba(255,255,255,0.15)",
-                color: "white",
-                border: "1px solid rgba(255,255,255,0.3)",
-                borderRadius: 3,
-                cursor: "pointer",
-              }}
-            >
-              copy all
-            </button>
-          </summary>
-          <ul
-            style={{
-              margin: "6px 0 0 0",
-              paddingLeft: 14,
-              maxHeight: 220,
-              overflow: "auto",
-              userSelect: "text",
-              WebkitUserSelect: "text",
-            }}
-          >
-            {stats.failures.map((f, i) => (
-              <li key={i} style={{ wordBreak: "break-all", marginBottom: 6 }}>
-                <code style={{ fontSize: 10, userSelect: "all", WebkitUserSelect: "all" }}>{f.url}</code>
-                <div style={{ opacity: 0.75, marginTop: 2, userSelect: "text", WebkitUserSelect: "text" }}>
-                  {f.err}
-                </div>
-              </li>
+            {INDEX_KEYS.map((k) => (
+              <option key={k} value={k} style={{ background: "#15191f" }}>
+                {INDICES[k].label} · {INDICES[k].desc}
+              </option>
             ))}
-          </ul>
-        </details>
+          </select>
+        </div>
+
+        <div
+          style={{
+            marginTop: 10,
+            padding: "9px 11px 11px",
+            border: `1px solid ${UI.hairline}`,
+            borderRadius: 8,
+            background: "rgba(255,255,255,0.025)",
+          }}
+        >
+          <div
+            style={{
+              ...eyebrowStyle,
+              color: UI.accent,
+              letterSpacing: "0.1em",
+              marginBottom: 2,
+            }}
+          >
+            {mode === "rgb"
+              ? "RGB · true color"
+              : `${INDICES[mode].label} · ${INDICES[mode].desc}`}
+          </div>
+
+          {mode === "rgb" && (
+            <>
+              <Slider
+                label="brightness"
+                value={rgbGain}
+                min={0.4}
+                max={2.5}
+                onChange={onRgbGainChange}
+                onReset={() => onRgbGainChange(DEFAULT_RGB_GAIN)}
+              />
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontFamily: UI.mono,
+                  fontSize: 9,
+                  color: UI.faint,
+                  marginTop: 2,
+                }}
+              >
+                <span>darker</span>
+                <span>brighter</span>
+              </div>
+            </>
+          )}
+
+          {isIndexMode(mode) && (
+            <>
+              <div style={{ marginTop: 8 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <span style={{ fontFamily: UI.mono, fontSize: 10, color: UI.mute }}>
+                    range
+                  </span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <NumBox
+                      value={ndviRange[0]}
+                      min={-1}
+                      max={1}
+                      onChange={(v) =>
+                        onNdviRangeChange([Math.min(v, ndviRange[1] - 0.05), ndviRange[1]])
+                      }
+                    />
+                    <span style={{ color: UI.faint }}>→</span>
+                    <NumBox
+                      value={ndviRange[1]}
+                      min={-1}
+                      max={1}
+                      onChange={(v) =>
+                        onNdviRangeChange([ndviRange[0], Math.max(v, ndviRange[0] + 0.05)])
+                      }
+                    />
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={-1}
+                  max={1}
+                  step={0.05}
+                  value={ndviRange[0]}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    onNdviRangeChange([Math.min(v, ndviRange[1] - 0.05), ndviRange[1]]);
+                  }}
+                  onDoubleClick={() => onNdviRangeChange([DEFAULT_NDVI_RANGE[0], ndviRange[1]])}
+                  style={{ width: "100%", marginTop: 4, accentColor: UI.accent }}
+                />
+                <input
+                  type="range"
+                  min={-1}
+                  max={1}
+                  step={0.05}
+                  value={ndviRange[1]}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    onNdviRangeChange([ndviRange[0], Math.max(v, ndviRange[0] + 0.05)]);
+                  }}
+                  onDoubleClick={() => onNdviRangeChange([ndviRange[0], DEFAULT_NDVI_RANGE[1]])}
+                  style={{ width: "100%", accentColor: UI.accent }}
+                />
+              </div>
+              <Slider
+                label="darken"
+                value={ndviScale}
+                min={0.2}
+                max={1.5}
+                onChange={onNdviScaleChange}
+                onReset={() => onNdviScaleChange(DEFAULT_NDVI_SCALE)}
+              />
+              <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+                <select
+                  value={ndviColormap}
+                  onChange={(e) => onNdviColormapChange(e.target.value as NdviColormap)}
+                  style={{ ...selectStyle, flex: 1, textTransform: "uppercase" }}
+                >
+                  {NDVI_COLORMAPS.map((c) => (
+                    <option key={c} value={c} style={{ background: "#15191f" }}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+                <Toggle
+                  active={ndviReversed}
+                  onClick={() => onNdviReversedChange(!ndviReversed)}
+                  title="Reverse the colormap direction"
+                >
+                  REVERSE
+                </Toggle>
+              </div>
+              <ColormapBar name={ndviColormap} reversed={ndviReversed} />
+              <div
+                style={{
+                  marginTop: 8,
+                  fontSize: 9,
+                  lineHeight: 1.5,
+                  color: UI.faint,
+                }}
+              >
+                Earth Genome public S2 bands. Satellogic imagery needs its own
+                band/asset conventions + auth.
+              </div>
+            </>
+          )}
+        </div>
+      </Section>
+
+      {/* Diagnostics: only when something failed to load */}
+      {stats.failures.length > 0 && (
+        <Section label="Diagnostics">
+          <details open style={{ fontSize: 11 }}>
+            <summary
+              style={{
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontFamily: UI.mono,
+                fontSize: 10,
+                color: "#f0a3a3",
+              }}
+            >
+              <span>{stats.failures.length} failed</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  copyFailures();
+                }}
+                style={{
+                  fontFamily: UI.mono,
+                  fontSize: 9,
+                  padding: "2px 7px",
+                  background: UI.field,
+                  color: UI.text,
+                  border: `1px solid ${UI.fieldBorder}`,
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                copy all
+              </button>
+            </summary>
+            <ul
+              style={{
+                margin: "8px 0 0 0",
+                paddingLeft: 14,
+                maxHeight: 200,
+                overflow: "auto",
+                userSelect: "text",
+                WebkitUserSelect: "text",
+              }}
+            >
+              {stats.failures.map((f, i) => (
+                <li key={i} style={{ wordBreak: "break-all", marginBottom: 6 }}>
+                  <code
+                    style={{
+                      fontFamily: UI.mono,
+                      fontSize: 9,
+                      color: UI.mute,
+                      userSelect: "all",
+                      WebkitUserSelect: "all",
+                    }}
+                  >
+                    {f.url}
+                  </code>
+                  <div style={{ color: UI.faint, marginTop: 2 }}>{f.err}</div>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </Section>
       )}
-      <div style={{ marginTop: 8, fontSize: 10, opacity: 0.4 }}>
-        Tiles stale or blank? Hard-reload (⌘⇧R / Ctrl+Shift+R).
+
+      {/* Footer: troubleshooting hint + provenance */}
+      <div
+        style={{
+          marginTop: 14,
+          paddingTop: 11,
+          borderTop: `1px solid ${UI.hairline}`,
+          fontFamily: UI.mono,
+          fontSize: 9,
+          lineHeight: 1.6,
+        }}
+      >
+        <div style={{ color: UI.faint }}>
+          <span style={{ color: UI.mute }}>/</span> search&nbsp;&nbsp;
+          <span style={{ color: UI.mute }}>M</span> marker&nbsp;&nbsp;
+          <span style={{ color: UI.mute }}>L</span> labels&nbsp;&nbsp;
+          <span style={{ color: UI.mute }}>D</span> draw&nbsp;&nbsp;
+          <span style={{ color: UI.mute }}>Esc</span> clear
+        </div>
+        <div style={{ color: UI.faint, marginTop: 4 }}>
+          Stale or blank? Hard-reload (⌘⇧R / Ctrl+Shift+R).
+        </div>
+        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 12 }}>
+          <a
+            href="https://github.com/kentstephen/sentinel-2-cog-deckgl-raster"
+            target="_blank"
+            rel="noreferrer"
+            title="This project's source on GitHub"
+            style={{
+              color: UI.mute,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              textDecoration: "none",
+            }}
+          >
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+            </svg>
+            View source
+          </a>
+        </div>
+        <div style={{ color: UI.faint, marginTop: 5 }}>
+          Built with{" "}
+          <a
+            href="https://developmentseed.org/deck.gl-raster/"
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: UI.accent, textDecoration: "none" }}
+          >
+            deck.gl-raster
+          </a>{" "}
+          by{" "}
+          <a
+            href="https://developmentseed.org"
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: UI.accent, textDecoration: "none" }}
+          >
+            Development Seed
+          </a>
+        </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Compact editable number box (kepler-style) for slider values. Commits any
+ * parseable number through `onChange`; clamps to [min, max] on commit.
+ */
+function NumBox({
+  value,
+  onChange,
+  min,
+  max,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  min: number;
+  max: number;
+}) {
+  const [text, setText] = useState(value.toFixed(2));
+  // Keep the field in sync when the value changes elsewhere (slider, reset).
+  useEffect(() => setText(value.toFixed(2)), [value]);
+  const commit = () => {
+    const v = Number(text);
+    if (Number.isFinite(v)) onChange(Math.max(min, Math.min(max, v)));
+    else setText(value.toFixed(2));
+  };
+  return (
+    <input
+      type="number"
+      value={text}
+      min={min}
+      max={max}
+      step={0.05}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+      }}
+      style={{
+        width: 52,
+        fontFamily: UI.mono,
+        fontSize: 10,
+        padding: "2px 5px",
+        textAlign: "right",
+        background: UI.field,
+        border: `1px solid ${UI.fieldBorder}`,
+        borderRadius: 4,
+        color: UI.text,
+        outline: "none",
+      }}
+    />
+  );
+}
+
+/**
+ * Horizontal reference bar for the active colormap. Draws row `index` of the
+ * shipped 256×107 `colormaps.png` sprite (1px per colormap) stretched to the
+ * bar width; flips horizontally when `reversed` so it matches what the shader
+ * renders (`Colormap.reversed`).
+ */
+function ColormapBar({ name, reversed }: { name: NdviColormap; reversed: boolean }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+    const img = new Image();
+    img.src = colormapsPngUrl;
+    img.onload = () => {
+      const row = COLORMAP_INDEX[name];
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      if (reversed) {
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+      }
+      ctx.drawImage(img, 0, row, 256, 1, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    };
+  }, [name, reversed]);
+  return (
+    <canvas
+      ref={ref}
+      width={256}
+      height={12}
+      style={{
+        marginTop: 5,
+        width: "100%",
+        height: 12,
+        borderRadius: 3,
+        display: "block",
+        border: "1px solid rgba(255,255,255,0.15)",
+      }}
+    />
   );
 }
 

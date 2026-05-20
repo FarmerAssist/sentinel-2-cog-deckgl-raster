@@ -153,6 +153,58 @@ panel subcomponents in their own files. Hard reload clears a corrupted session.
 deck.gl-geotiff on AOI change = in-flight COG fetches cancelled. Not a failure;
 library-level log, not worth patching.
 
+## Session 2026-05-20 (session 3) — indices, redesign, shortcuts
+
+Worked from a written plan (`~/.claude/plans/swift-sauteeing-sloth.md`).
+
+**Shipped:**
+- **CI → npm.** Removed `pnpm-lock.yaml` + `pnpm-workspace.yaml`, generated
+  `package-lock.json`, rewrote `deploy-pages.yml` (setup-node → `npm ci`/`npm
+  run build`). Footgun: a leftover pnpm-style `node_modules` makes `npm install`
+  throw `Cannot read properties of null (reading 'matches')` — `rm -rf
+  node_modules` then reinstall. Repo Pages source must be set to "GitHub
+  Actions" (user action, not in code).
+- **Spectral indices.** Generalized `RenderMode` → `INDICES` registry
+  (`renderPipeline.ts`): NDVI/NDWI/NDBI/NDMI, all `(a−b)/(a+b)` sharing one
+  shader. Renamed `NdviFromRG` → `NormalizedDifference`. **GLSL footgun:** the
+  shader's locals must NOT be named `a`/`b`/`r`/`g` — CompositeBands injects
+  `float a/b/g/r` (alpha/blue/green/red) into the same `DECKGL_FILTER_COLOR`
+  scope, so `float a` → `'a' : redefinition` compile error. Used `ndA`/`ndB`.
+  `stac.ts` `REQUIRED_BANDS` now `B03/B04/B08/B11` (dropped B02 — RGB uses TCI).
+- **Colormaps.** Divergent ramps (rdylgn/rdbu/spectral) already in the 256×107
+  `colormaps.png` sprite — no regen. `reversed` is a float uniform on the
+  `Colormap` module; wired a toggle + a canvas `ColormapBar` that draws sprite
+  row `COLORMAP_INDEX[name]` (1px) stretched, flipped when reversed.
+- **Live scoreboard.** `loadStats.ts` pub-sub; RGB `getSource` reports
+  loaded/failed, `getTileData` reports give-ups. NDVI mode can't report
+  `loaded` (MultiCOGLayer opens GeoTIFFs internally, no hook) — by design.
+- **Draw AOI** (`DrawBbox`, lonboard `selected_bounds` pattern, no dep) +
+  400ms debounce on the bbox/year STAC effect. Search clear (×).
+- **Panel redesign** (`/frontend-design`): sectioned instrument surface
+  (`Section`/`Toggle`/`Slider` helpers, `UI` token object, teal `#7dd3c0`
+  accent, IBM Plex Mono via `index.html`). RGB vs index controls live in a
+  bounded card whose header names the active mode. Editable `NumBox` values.
+- **Footer credit** reworked after user flagged it implied affiliation: GitHub
+  "View source" (their repo) separated from "Built with deck.gl-raster by
+  Development Seed" (→ developmentseed.org).
+- **Keyboard shortcuts** (`/ M L D Esc`), letter keys exempt while typing.
+  **Marker = transient context:** auto-hide on first user `movestart` (guard on
+  `ev.originalEvent` so programmatic `flyTo` doesn't dismiss it), `M` to summon.
+  `PlaceSearch` is now `forwardRef` so `/` can focus it.
+
+**Verification:** drove headless Chromium (Playwright, swiftshader) — shaders
+compile, shortcuts fire, typing-exempt holds, panel renders in both modes.
+Caveat: software WebGL can't upload `r16unorm` (`glTexStorage2D 0x822A`), so
+index *tiles* don't paint headless — RGB (rgba8unorm) does; index render needs
+real GPU. Marker `M`/auto-dismiss needs a live geocode pick to fully exercise.
+
+**Docs added:** `docs/CUSTOMIZE.md` (how to change AOI/index/colormap/theme/
+shortcuts), `docs/SPECTRAL_INDICES.md` (catalog roadmap). README/CLAUDE refreshed
+(RGB is COGLayer/TCI, npm, shortcuts).
+
+**Open:** user still to confirm the latest on real hardware before push;
+viewport-driven STAC fetch + embeddings sub-project still deferred (see plan).
+
 ## Conduct
 
 Inherits global `~/CLAUDE.md`. No flattery, no unsolicited critique,

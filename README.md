@@ -49,6 +49,13 @@ Other panel controls: an AOI **draw** tool (drag a box to set the search
 extent), a search-clear (×), a labels toggle, and a load scoreboard with a
 copy-failures debug list.
 
+**Keyboard shortcuts:** `/` focus search · `M` marker · `L` labels · `D` draw
+AOI · `Esc` cancel/clear. The search-place marker is transient — it appears on
+a search/jump and auto-hides the moment you pan or zoom; press `M` to summon it.
+
+See [`docs/CUSTOMIZE.md`](./docs/CUSTOMIZE.md) for how to change the AOI/year,
+add a spectral index, swap colormaps, re-theme the panel, or edit shortcuts.
+
 A year dropdown (2022 / 2023 / 2024) drives the STAC `datetime` filter.
 The collection advertises 2018–2021 too but those items live on a
 non-CORS bucket (`ei-imagery.s3.us-east-2`), so they're filtered out

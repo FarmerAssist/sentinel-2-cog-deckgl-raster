@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { searchPhoton, type GeoResult } from "./geocode";
 
 /**
@@ -7,13 +7,16 @@ import { searchPhoton, type GeoResult } from "./geocode";
  * as a clean boundary (an in-file forward reference from InfoPanel tripped
  * "PlaceSearch is not defined" during HMR).
  */
-export function PlaceSearch({ onPick }: { onPick: (r: GeoResult) => void }) {
+export const PlaceSearch = forwardRef<HTMLInputElement, { onPick: (r: GeoResult) => void }>(
+  function PlaceSearch({ onPick }, ref) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<GeoResult[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Expose the input so a global "/" shortcut can focus it from App.
+  useImperativeHandle(ref, () => inputRef.current as HTMLInputElement, []);
   // Set when we fill the input from a selection, so the debounce effect below
   // doesn't re-search and reopen the dropdown after the user has picked.
   const skipSearch = useRef(false);
@@ -182,4 +185,5 @@ export function PlaceSearch({ onPick }: { onPick: (r: GeoResult) => void }) {
       )}
     </div>
   );
-}
+  },
+);

@@ -79,6 +79,7 @@ export function buildRenderPipeline(
     ndviColormap?: IndexColormap;
     ndviRange?: [number, number];
     ndviScale?: number;
+    ndviReversed?: boolean;
   } = {},
 ): RasterModule[] {
   if (mode === "rgb") return []; // RGB is handled by COGLayer/renderTile, not here.
@@ -93,7 +94,7 @@ export function buildRenderPipeline(
       props: {
         colormapTexture,
         colormapIndex: COLORMAP_INDEX[opts.ndviColormap ?? DEFAULT_NDVI_COLORMAP],
-        reversed: false,
+        reversed: opts.ndviReversed ?? false,
       },
     },
     {
