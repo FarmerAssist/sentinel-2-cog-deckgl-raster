@@ -2,6 +2,8 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  // Project Pages site is served from /<repo>/.
+  base: "/sentinel-2-cog-deckgl-raster/",
   plugins: [react()],
   worker: { format: "es" },
   server: { port: 5455, strictPort: true },
