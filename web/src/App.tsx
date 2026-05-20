@@ -2,6 +2,7 @@ import {
   MosaicLayer,
   MultiCOGLayer,
 } from "@developmentseed/deck.gl-geotiff";
+import { BitmapLayer } from "@deck.gl/layers";
 import {
   createColormapTexture,
   decodeColormapSprite,
@@ -19,6 +20,7 @@ import {
 import type { MapRef } from "react-map-gl/maplibre";
 
 import { fetchStacItems, type PartialSTACItem } from "./stac";
+import { getOverviewImage } from "./overviewMosaic";
 import {
   buildRenderPipeline,
   COMPOSITE,
@@ -37,10 +39,9 @@ import {
 // (filtered out by stac.ts CORS_OK_HOSTS).
 const AVAILABLE_YEARS = [2022, 2023, 2024] as const;
 const DEFAULT_YEAR = 2023;
-// Amazon — central/southern basin (~749 CORS-open items; Negro, Madeira,
-// Purus). Big enough to roam; only zooming fully out to frame all of it at
-// once gets heavy (~1500 header opens). The hard cliff is thousands, not this.
-const STAC_BBOX: [number, number, number, number] = [-70.0, -10.0, -50.0, 2.0];
+// Yuma, AZ + margin (lower Colorado River irrigated ag vs Sonoran desert;
+// ~32 CORS-open items in 2023)
+const STAC_BBOX: [number, number, number, number] = [-115.5, 31.5, -113.0, 33.5];
 
 function yearToDatetime(year: number): string {
   return `${year}-01-01T00:00:00Z/${year}-12-31T23:59:59Z`;
@@ -95,6 +96,10 @@ export default function App() {
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapTexture, setColormapTexture] = useState<Texture | null>(null);
   const [labels, setLabels] = useState(false);
+  const [overview, setOverview] = useState(false);
+  const [overviewImages, setOverviewImages] = useState<Map<string, ImageBitmap>>(
+    () => new Map(),
+  );
   const stats: LoadStats = { loaded: 0, failed: 0, failures: [] };
 
   const mapStyle = labels
@@ -153,8 +158,54 @@ export default function App() {
     return () => ac.abort();
   }, [year]);
 
+  // Overview mode: decode each item's coarsest TCI overview into a BitmapLayer
+  // image. Seamless (one reprojected quad per item) but RGB/TCI only. Loads
+  // progressively into a state Map so layers fill in as decodes finish.
+  useEffect(() => {
+    if (!overview || stacItems.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const item of stacItems) {
+        if (cancelled) break;
+        if (overviewImages.has(item.id)) continue;
+        try {
+          const img = await getOverviewImage(item.assets.visual.href);
+          if (cancelled) break;
+          setOverviewImages((prev) => {
+            if (prev.has(item.id)) return prev;
+            const next = new Map(prev);
+            next.set(item.id, img);
+            return next;
+          });
+        } catch (err) {
+          console.warn(`[overview] failed ${item.id}`, err);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // overviewImages intentionally omitted: we read it for the has() skip but
+    // don't want the effect to re-run on every image that lands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overview, stacItems]);
+
   const layers = useMemo(() => {
     if (stacItems.length === 0) return [];
+
+    if (overview) {
+      return stacItems
+        .filter((it) => overviewImages.has(it.id))
+        .map(
+          (it) =>
+            new BitmapLayer({
+              id: `s2-overview-${it.id}`,
+              image: overviewImages.get(it.id)!,
+              bounds: it.bbox, // [W, S, E, N]
+              beforeId: labelBeforeId,
+            } as any),
+        );
+    }
     if (mode === "ndvi" && !colormapTexture) return [];
 
     const bandSlots = SOURCE_BANDS[mode];
@@ -215,12 +266,12 @@ export default function App() {
       beforeId: labelBeforeId,
     });
     return [mosaic];
-  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, rgbRescaleMax, ndviColormap, ndviRange, ndviScale]);
+  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, rgbRescaleMax, ndviColormap, ndviRange, ndviScale, overview, overviewImages]);
 
   const initialViewState = {
-    longitude: -60.0,
-    latitude: -4.0,
-    zoom: 6,
+    longitude: -114.6,
+    latitude: 32.7,
+    zoom: 9,
     pitch: 0,
     bearing: 0,
   };
@@ -269,6 +320,8 @@ export default function App() {
         onNdviScaleChange={setNdviScale}
         labels={labels}
         onLabelsChange={setLabels}
+        overview={overview}
+        onOverviewChange={setOverview}
       />
     </div>
   );
@@ -293,6 +346,8 @@ function InfoPanel({
   onNdviScaleChange,
   labels,
   onLabelsChange,
+  overview,
+  onOverviewChange,
 }: {
   sourceCount: number;
   year: number | null;
@@ -312,6 +367,8 @@ function InfoPanel({
   onNdviScaleChange: (s: number) => void;
   labels: boolean;
   onLabelsChange: (v: boolean) => void;
+  overview: boolean;
+  onOverviewChange: (v: boolean) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
@@ -438,7 +495,7 @@ function InfoPanel({
           </button>
         ))}
       </div>
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: 8, display: "flex", gap: 4 }}>
         <button
           type="button"
           onClick={() => onLabelsChange(!labels)}
@@ -454,6 +511,23 @@ function InfoPanel({
           }}
         >
           labels {labels ? "on" : "off"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onOverviewChange(!overview)}
+          title="Seamless low-res mosaic (RGB/TCI only). Toggle off for full-res streaming."
+          style={{
+            padding: "4px 10px",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid rgba(255,255,255,0.3)",
+            background: overview ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
+            color: "white",
+            cursor: "pointer",
+            letterSpacing: 0.5,
+          }}
+        >
+          overview {overview ? "on" : "off"}
         </button>
       </div>
       {mode === "ndvi" && (

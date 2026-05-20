@@ -72,8 +72,39 @@ per-item mesh:
   noticeable on low-contrast scenes. A darker basemap or gentler stretch
   reduces their salience.
 
+## Attempt 2 (branch `overview-mosaic`) — BitmapLayer overview: STILL SEAMS
+
+Built a zoom-independent "overview" toggle: per item, decode the coarsest TCI
+overview (~156 px, one Range read) into an ImageBitmap and render it as a
+single `BitmapLayer` with `bounds = STAC item.bbox`. Theory: one GPU-
+reprojected quad per item, adjacent items share exact lng/lat edges → seamless,
+and no per-tile mesh to mismatch.
+
+**Result: still seams.** So the quad-per-item idea didn't kill them. Needs
+debugging next session. Leading hypotheses, most likely first:
+
+1. **`bounds = STAC item.bbox` is approximate.** The collection is gridded in
+   EPSG:3857 (origin 494088…, 19.109 m px, 9984 px). Adjacent items' *3857*
+   extents abut exactly, but each STAC `bbox` is a WGS84 footprint that may be
+   rounded — so item A's east edge ≠ item B's west edge by an epsilon, leaving
+   a hairline basemap gap (or overlap) between quads.
+   **Fix to try:** in `overviewMosaic.ts` we already open the GeoTIFF — read
+   the exact `tiff.bbox` (3857), reproject the two corners to WGS84 with proj4,
+   and return *those* precise bounds with the image instead of `item.bbox`.
+   Adjacent items then share a bit-identical edge.
+2. **No-data transparency eats the edge.** We set alpha 0 where TCI = (0,0,0).
+   If the overview has a 0-valued outer ring, that ring goes transparent and
+   shows basemap as a seam even when bounds abut. Test by temporarily forcing
+   alpha 255 and see if seams vanish; if so, only zero-out *interior* no-data.
+3. **BitmapLayer edge sampling / texture clamp.** A half-texel at the image
+   border can leave a hairline. Less likely than #1/#2 but check
+   `textureParameters` / a 1px overdraw on bounds.
+
+Recommended order: #2 (cheap toggle), then #1 (the real one).
+
 ## Practical guidance
 
 - For analysis or screenshots that must be seamless, **use NDVI**.
 - RGB is fine for browsing; the seams are faint and scene-dependent (worst on
   flat, dark, low-contrast cover like rainforest).
+- `overview` toggle exists but does NOT yet solve seams — see Attempt 2.
