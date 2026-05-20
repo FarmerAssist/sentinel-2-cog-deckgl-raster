@@ -1104,12 +1104,43 @@ function InfoPanel({
           </a>
         </div>
         <div style={{ color: UI.faint, marginTop: 5 }}>
+          Data:{" "}
+          <a
+            href="https://source.coop/earthgenome/sentinel2-temporal-mosaics"
+            target="_blank"
+            rel="noreferrer"
+            title="Earth Genome Sentinel-2 Temporal Mosaics on Source Cooperative"
+            style={{ color: UI.accent, textDecoration: "none" }}
+          >
+            Sentinel-2 Temporal Mosaics
+          </a>{" "}
+          by{" "}
+          <a
+            href="https://www.earthgenome.org"
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: UI.mute, textDecoration: "underline" }}
+          >
+            Earth Genome
+          </a>{" "}
+          on{" "}
+          <a
+            href="https://source.coop"
+            target="_blank"
+            rel="noreferrer"
+            title="Source Cooperative"
+            style={{ color: UI.mute, textDecoration: "underline" }}
+          >
+            Source Coop
+          </a>
+        </div>
+        <div style={{ color: UI.faint, marginTop: 5 }}>
           Built with{" "}
           <a
             href="https://developmentseed.org/deck.gl-raster/"
             target="_blank"
             rel="noreferrer"
-            style={{ color: UI.accent, textDecoration: "none" }}
+            style={{ color: UI.mute, textDecoration: "underline" }}
           >
             deck.gl-raster
           </a>{" "}
@@ -1118,7 +1149,7 @@ function InfoPanel({
             href="https://developmentseed.org"
             target="_blank"
             rel="noreferrer"
-            style={{ color: UI.accent, textDecoration: "none" }}
+            style={{ color: UI.mute, textDecoration: "underline" }}
           >
             Development Seed
           </a>
