@@ -37,8 +37,10 @@ import {
 // (filtered out by stac.ts CORS_OK_HOSTS).
 const AVAILABLE_YEARS = [2022, 2023, 2024] as const;
 const DEFAULT_YEAR = 2023;
-// London + southern UK
-const STAC_BBOX: [number, number, number, number] = [-6.0, 49.5, 2.0, 53.0];
+// Amazon — central/southern basin (~749 CORS-open items; Negro, Madeira,
+// Purus). Big enough to roam; only zooming fully out to frame all of it at
+// once gets heavy (~1500 header opens). The hard cliff is thousands, not this.
+const STAC_BBOX: [number, number, number, number] = [-70.0, -10.0, -50.0, 2.0];
 
 function yearToDatetime(year: number): string {
   return `${year}-01-01T00:00:00Z/${year}-12-31T23:59:59Z`;
@@ -74,6 +76,13 @@ export default function App() {
   // tiles. Passing a fresh object each render was forcing a full refetch on
   // every slider tick.
   const sourcesCache = useRef(new Map<string, Record<string, { url: string }>>());
+  const modeGen = useRef(0);
+  const prevMode = useRef<RenderMode | null>(null);
+  // One AbortController per generation. Aborting on mode switch kills the
+  // old mode's in-flight band fetches so they stop hogging the (maxRequests-
+  // capped) scheduler — otherwise a backlog of pending NDVI reads can starve
+  // the new mode's requests and the switch appears to hang.
+  const genAbort = useRef<AbortController | null>(null);
   const [labelBeforeId, setLabelBeforeId] = useState<string | undefined>(undefined);
   const [stacItems, setStacItems] = useState<PartialSTACItem[]>([]);
   const [stacError, setStacError] = useState<string | null>(null);
@@ -85,7 +94,26 @@ export default function App() {
   const [ndviScale, setNdviScale] = useState<number>(DEFAULT_NDVI_SCALE);
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapTexture, setColormapTexture] = useState<Texture | null>(null);
+  const [labels, setLabels] = useState(false);
   const stats: LoadStats = { loaded: 0, failed: 0, failures: [] };
+
+  const mapStyle = labels
+    ? "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+    : "https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json";
+
+  // Bump a generation on mode change so the MosaicLayer/MultiCOGLayer ids
+  // change, forcing deck.gl to fully unmount the old mode's layer tree
+  // instead of leaving stale tile-cache entries that keep rendering + fetching.
+  if (prevMode.current !== mode) {
+    if (prevMode.current !== null) modeGen.current += 1;
+    prevMode.current = mode;
+    sourcesCache.current.clear();
+    genAbort.current?.abort();
+    genAbort.current = new AbortController();
+  }
+  if (!genAbort.current) genAbort.current = new AbortController();
+  const gen = modeGen.current;
+  const genSignal = genAbort.current.signal;
 
   // Load + upload the cividis-bearing colormap sprite once the GPU device exists.
   useEffect(() => {
@@ -139,8 +167,11 @@ export default function App() {
     });
 
     const mosaic = new MosaicLayer<PartialSTACItem, null>({
-      id: `s2-mosaic-${mode}`,
+      id: `s2-mosaic-${mode}-${gen}`,
       sources: stacItems,
+      // Cache full MultiCOGLayer instances minimally — keeps stale per-mode
+      // sublayers from lingering across a mode switch.
+      maxCacheSize: 0,
       // MultiCOGLayer fetches its own GeoTIFFs; MosaicLayer only needs each
       // item's bbox (used internally for spatial indexing).
       getSource: async () => null,
@@ -157,16 +188,20 @@ export default function App() {
           sourcesCache.current.set(cacheKey, sources);
         }
         return new MultiCOGLayer({
-          id: `s2-multi-${mode}-${source.id}`,
+          id: `s2-multi-${mode}-${gen}-${source.id}`,
           sources,
           composite,
           renderPipeline: pipeline,
           epsgResolver,
-          // See docs/PERF_KNOBS.md for the full menu + drawbacks. Shipping
-          // just these two: refinement gives instant-feeling zoom-in;
-          // maxRequests=16 saturates HTTP/2 to CloudFront.
+          signal: genSignal,
+          // See docs/PERF_KNOBS.md for the full menu + drawbacks.
           refinementStrategy: "best-available",
           maxRequests: 16,
+          // NOTE: RGB shows faint tile-edge seams that NDVI's ratio hides.
+          // Tested maxError:0.01 (tighter reproject mesh) and
+          // refinementStrategy:"no-overlap" (no overview mixing) — neither
+          // fixed it. Root cause is the per-item independent tile grids; see
+          // docs/SEAMS.md.
           // Inner RasterTileLayer caches each tile's renderPipeline result
           // (raster-tile-layer.ts:338 wires renderTile → renderSubLayers).
           // Without this, brightness/colormap prop changes never reach
@@ -180,12 +215,12 @@ export default function App() {
       beforeId: labelBeforeId,
     });
     return [mosaic];
-  }, [stacItems, labelBeforeId, mode, colormapTexture, rgbRescaleMax, ndviColormap, ndviRange, ndviScale]);
+  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, rgbRescaleMax, ndviColormap, ndviRange, ndviScale]);
 
   const initialViewState = {
-    longitude: -0.1,
-    latitude: 51.5,
-    zoom: 6.5,
+    longitude: -60.0,
+    latitude: -4.0,
+    zoom: 6,
     pitch: 0,
     bearing: 0,
   };
@@ -198,12 +233,19 @@ export default function App() {
         minZoom={3}
         // attributionControl={false}  // comment out to re-enable the (i) badge bottom-right
         attributionControl={false}
-        mapStyle="https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json"
+        mapStyle={mapStyle}
         onLoad={(e) => {
           const map = e.target;
           const ls = map.getStyle()?.layers ?? [];
           const firstSymbol = ls.find((l: any) => l.type === "symbol");
-          if (firstSymbol) setLabelBeforeId(firstSymbol.id);
+          setLabelBeforeId(firstSymbol?.id);
+          // Re-derive the label insertion point whenever the style reloads
+          // (e.g. toggling the labels basemap) so imagery stays under labels.
+          map.on("styledata", () => {
+            const layers = map.getStyle()?.layers ?? [];
+            const sym = layers.find((l: any) => l.type === "symbol");
+            setLabelBeforeId(sym?.id);
+          });
         }}
       >
         <DeckGLOverlay layers={layers} onDevice={setDevice} />
@@ -225,6 +267,8 @@ export default function App() {
         onNdviRangeChange={setNdviRange}
         ndviScale={ndviScale}
         onNdviScaleChange={setNdviScale}
+        labels={labels}
+        onLabelsChange={setLabels}
       />
     </div>
   );
@@ -247,6 +291,8 @@ function InfoPanel({
   onNdviRangeChange,
   ndviScale,
   onNdviScaleChange,
+  labels,
+  onLabelsChange,
 }: {
   sourceCount: number;
   year: number | null;
@@ -264,6 +310,8 @@ function InfoPanel({
   onNdviRangeChange: (r: [number, number]) => void;
   ndviScale: number;
   onNdviScaleChange: (s: number) => void;
+  labels: boolean;
+  onLabelsChange: (v: boolean) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
@@ -389,6 +437,24 @@ function InfoPanel({
             {m === "rgb" ? "RGB (B04/B03/B02)" : "NDVI (cividis)"}
           </button>
         ))}
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <button
+          type="button"
+          onClick={() => onLabelsChange(!labels)}
+          style={{
+            padding: "4px 10px",
+            fontSize: 11,
+            borderRadius: 3,
+            border: "1px solid rgba(255,255,255,0.3)",
+            background: labels ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
+            color: "white",
+            cursor: "pointer",
+            letterSpacing: 0.5,
+          }}
+        >
+          labels {labels ? "on" : "off"}
+        </button>
       </div>
       {mode === "ndvi" && (
         <div style={{ marginTop: 8, fontSize: 11 }}>

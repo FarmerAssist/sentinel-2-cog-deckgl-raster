@@ -182,6 +182,13 @@ the item is renderable.
   because the MGRS tiles themselves are defined in their respective UTM
   zones. Live with it, or pad with a darker basemap. See
   `docs/MULTICOG_NDVI.md` for the architectural reason.
+- **RGB tile-edge seams (NDVI is clean).** A faint grid of seams shows in
+  RGB at every zoom but not in NDVI — because NDVI's normalized ratio
+  cancels the sub-pixel absolute-brightness discontinuities that RGB
+  exposes. Root cause is the per-item independent reprojection meshes /
+  tile grids, not the data (the product is seamless) and not mesh
+  tolerance or overview mixing (both tested, neither helped). Full
+  investigation in `docs/SEAMS.md`.
 - **Source count > file size.** A 400 MB COG and a 5 MB COG cost the
   same memory if the visible-tile count and overview level are the
   same. The real cost driver is "how many sources are visible" — i.e.
