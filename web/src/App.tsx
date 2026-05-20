@@ -16,11 +16,14 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Map as MaplibreMap,
+  Marker,
   useControl,
 } from "react-map-gl/maplibre";
 import type { MapRef } from "react-map-gl/maplibre";
 
 import { fetchStacItems, type PartialSTACItem } from "./stac";
+import { resultToBbox, type GeoResult } from "./geocode";
+import { PlaceSearch } from "./PlaceSearch";
 import { loadGeoTIFF } from "./loadGeotiff";
 import { getTileData, type S2TileData } from "./getTileData";
 import { renderTile } from "./renderTile";
@@ -70,6 +73,12 @@ const DEFAULT_YEAR = 2023;
 // ~32 CORS-open items in 2023)
 const STAC_BBOX: [number, number, number, number] = [-115.5, 31.5, -113.0, 33.5];
 
+// Items are ANNUAL composites (`YYYY-01-01_YYYY+1-01-01`). A full-year query
+// also matches the adjacent years' annuals at the Jan-1 boundary, so a tile can
+// come back as two overlapping composites. We KEEP that overlap on purpose: a
+// no-data hole (cloud) in one year's composite can be backfilled by the other
+// through the mosaic (discardBlack lets the lower layer show through). Deduping
+// would maximize speed but risk losing coverage.
 function yearToDatetime(year: number): string {
   return `${year}-01-01T00:00:00Z/${year}-12-31T23:59:59Z`;
 }
@@ -123,6 +132,9 @@ export default function App() {
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapTexture, setColormapTexture] = useState<Texture | null>(null);
   const [labels, setLabels] = useState(false);
+  const [bbox, setBbox] = useState<[number, number, number, number]>(STAC_BBOX);
+  const [marker, setMarker] = useState<{ lng: number; lat: number; label: string } | null>(null);
+  const [showMarker, setShowMarker] = useState(true);
   const stats: LoadStats = { loaded: 0, failed: 0, failures: [] };
 
   const mapStyle = labels
@@ -167,10 +179,17 @@ export default function App() {
     const ac = new AbortController();
     setStacItems([]);
     setStacError(null);
-    fetchStacItems({ datetime: yearToDatetime(year), bbox: STAC_BBOX, signal: ac.signal })
-      .then((items) => {
+    fetchStacItems({ datetime: yearToDatetime(year), bbox, signal: ac.signal })
+      .then(({ items, rejected }) => {
         setStacItems(items);
-        console.info(`[stac] ${items.length} items for ${year}`);
+        console.info(`[stac] ${items.length} items for ${year} (${rejected} CORS-blocked)`);
+        if (items.length === 0) {
+          setStacError(
+            rejected > 0
+              ? `No CORS-open imagery here — ${rejected} item${rejected > 1 ? "s" : ""} exist but are on a CORS-blocked host. Try the Americas or Europe.`
+              : "No imagery for this area/year.",
+          );
+        }
       })
       .catch((err) => {
         if (err.name !== "AbortError") {
@@ -179,7 +198,21 @@ export default function App() {
         }
       });
     return () => ac.abort();
-  }, [year]);
+  }, [year, bbox]);
+
+  const handlePickPlace = (r: GeoResult) => {
+    const bb = resultToBbox(r);
+    setBbox(bb);
+    setMarker({ lng: r.center[0], lat: r.center[1], label: r.label });
+    setShowMarker(true);
+    mapRef.current?.fitBounds(
+      [
+        [bb[0], bb[1]],
+        [bb[2], bb[3]],
+      ],
+      { padding: 40, duration: 1000 },
+    );
+  };
 
   const layers = useMemo(() => {
     if (stacItems.length === 0) return [];
@@ -305,6 +338,22 @@ export default function App() {
         }}
       >
         <DeckGLOverlay layers={layers} onDevice={setDevice} />
+        {marker && showMarker && (
+          <Marker longitude={marker.lng} latitude={marker.lat} anchor="bottom">
+            <div
+              title={marker.label}
+              style={{
+                width: 14,
+                height: 14,
+                borderRadius: "50% 50% 50% 0",
+                transform: "rotate(-45deg)",
+                background: "#ff4d4f",
+                border: "2px solid white",
+                boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+              }}
+            />
+          </Marker>
+        )}
       </MaplibreMap>
       <InfoPanel
         sourceCount={stacItems.length}
@@ -325,6 +374,10 @@ export default function App() {
         onNdviScaleChange={setNdviScale}
         labels={labels}
         onLabelsChange={setLabels}
+        onPickPlace={handlePickPlace}
+        hasMarker={marker !== null}
+        showMarker={showMarker}
+        onToggleMarker={() => setShowMarker((v) => !v)}
       />
     </div>
   );
@@ -349,6 +402,10 @@ function InfoPanel({
   onNdviScaleChange,
   labels,
   onLabelsChange,
+  onPickPlace,
+  hasMarker,
+  showMarker,
+  onToggleMarker,
 }: {
   sourceCount: number;
   year: number | null;
@@ -368,6 +425,10 @@ function InfoPanel({
   onNdviScaleChange: (s: number) => void;
   labels: boolean;
   onLabelsChange: (v: boolean) => void;
+  onPickPlace: (r: GeoResult) => void;
+  hasMarker: boolean;
+  showMarker: boolean;
+  onToggleMarker: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
@@ -464,6 +525,8 @@ function InfoPanel({
         </select>
       </div>
 
+      <PlaceSearch onPick={onPickPlace} />
+
       <div style={{ opacity: 0.65, fontSize: 11, marginTop: 4 }}>
         {error
           ? `STAC error: ${error}`
@@ -511,6 +574,24 @@ function InfoPanel({
         >
           labels {labels ? "on" : "off"}
         </button>
+        {hasMarker && (
+          <button
+            type="button"
+            onClick={onToggleMarker}
+            style={{
+              padding: "4px 10px",
+              fontSize: 11,
+              borderRadius: 3,
+              border: "1px solid rgba(255,255,255,0.3)",
+              background: showMarker ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
+              color: "white",
+              cursor: "pointer",
+              letterSpacing: 0.5,
+            }}
+          >
+            marker {showMarker ? "on" : "off"}
+          </button>
+        )}
       </div>
       {mode === "ndvi" && (
         <div style={{ marginTop: 8, fontSize: 11 }}>
@@ -530,6 +611,7 @@ function InfoPanel({
               const v = Number(e.target.value);
               onNdviRangeChange([Math.min(v, ndviRange[1] - 0.05), ndviRange[1]]);
             }}
+            onDoubleClick={() => onNdviRangeChange([DEFAULT_NDVI_RANGE[0], ndviRange[1]])}
             style={{ width: "100%", marginTop: 2 }}
           />
           <input
@@ -542,6 +624,7 @@ function InfoPanel({
               const v = Number(e.target.value);
               onNdviRangeChange([ndviRange[0], Math.max(v, ndviRange[0] + 0.05)]);
             }}
+            onDoubleClick={() => onNdviRangeChange([ndviRange[0], DEFAULT_NDVI_RANGE[1]])}
             style={{ width: "100%" }}
           />
           <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", opacity: 0.8 }}>
@@ -555,6 +638,7 @@ function InfoPanel({
             step={0.05}
             value={ndviScale}
             onChange={(e) => onNdviScaleChange(Number(e.target.value))}
+            onDoubleClick={() => onNdviScaleChange(DEFAULT_NDVI_SCALE)}
             style={{ width: "100%" }}
           />
         </div>
@@ -600,6 +684,7 @@ function InfoPanel({
             step={0.05}
             value={rgbGain}
             onChange={(e) => onRgbGainChange(Number(e.target.value))}
+            onDoubleClick={() => onRgbGainChange(DEFAULT_RGB_GAIN)}
             style={{ width: "100%", marginTop: 2 }}
           />
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, opacity: 0.5 }}>
@@ -655,3 +740,4 @@ function InfoPanel({
     </div>
   );
 }
+

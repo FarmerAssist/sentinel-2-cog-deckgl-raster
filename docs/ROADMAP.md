@@ -6,31 +6,28 @@
   `COGLayer` (naip-mosaic pattern); see `docs/SEAMS.md` → "RESOLVED". The
   BitmapLayer overview mode + zoom-gate were dropped (looked worse, still
   seamed). Brightness is now a uniform `ScaleColor` gain on the TCI texture.
+- **Place search + marker (2026-05-20).** OSM geocoding via **Photon**
+  (`src/geocode.ts`, `src/PlaceSearch.tsx`) — no LLM. Debounced autocomplete
+  (350ms, ≥3 chars), arrow-key nav, Enter/Escape/blur to dismiss. On select it
+  flies the map (`fitBounds`), sets the bbox state (drives the STAC refetch),
+  and drops a hideable marker. `resultToBbox` always applies a margin + a point
+  floor and clamps the span (`maxSpanDeg=3.0`) so a huge extent doesn't fan out
+  into thousands of COGs — tune `maxSpanDeg`/`minHalfDeg` in `geocode.ts`.
+- **Coverage messaging (2026-05-20).** `fetchStacItems` reports how many items
+  were dropped for being on the CORS-blocked host; the panel says "No CORS-open
+  imagery here" when an AOI has none.
+- **Slider double-click resets to default** (brightness/NDVI range/darken).
 
-## TODO: natural-language place loader ("LLM geocode + marker")
+  Footgun: keep panel subcomponents in their own files — an in-`App.tsx`
+  forward reference across the `InfoPanel` boundary tripped react-refresh's
+  "X is not defined" on every HMR update (false crash; needs hard reload).
 
-Goal: type a place ("Yuma with margin", "the Mato Grosso soy frontier") and
-have the app fly there, set `STAC_BBOX`, and load the tiles — instead of
-hand-editing `STAC_BBOX` / `initialViewState` in `App.tsx`.
+## TODO: fuzzy/relative queries (optional LLM front-end)
 
-### Shape
-
-1. **Text box** in the panel.
-2. **Resolve text → bbox + center.** Two ways, in order of reliability:
-   - **Geocoder API** (Nominatim / Mapbox / Photon) — deterministic, free-ish,
-     returns a real bbox. Best for plain place names.
-   - **Small LLM** — better for *fuzzy/relative* queries the geocoder can't
-     parse ("the soy frontier", "downstream of the confluence", "+200 km
-     buffer"). Have it emit structured JSON `{ center:[lng,lat], bbox:[w,s,e,n],
-     label }`. LLMs are decent at well-known coords; for precision, let the LLM
-     extract a place name + modifiers, then hand the name to the geocoder and
-     apply the buffer/margin itself.
-   - **Recommendation:** geocoder as the workhorse, LLM only as the fuzzy
-     front-end that normalizes the query into `{place, bufferKm}`. Don't trust
-     an LLM for raw coordinates when a geocoder is one call away.
-3. **Drop a marker** at the resolved center (deck `IconLayer`/`ScatterplotLayer`
-   or a maplibre Marker), with a **toggle** to show/hide it. Label = the query.
-4. **Load the tiles.** Set `STAC_BBOX` from the resolved bbox and refetch.
+The Photon geocoder handles plain place names. An LLM would only earn its place
+as a *front-end* for fuzzy/relative queries it can't parse ("the soy frontier",
+"+200 km buffer") — have it normalize to `{place, bufferKm}`, then hand the
+place to Photon. Don't trust an LLM for raw coordinates. Low priority.
 
 ### "Load >=100 tiles at a time"
 
