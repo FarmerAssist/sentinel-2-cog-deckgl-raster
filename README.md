@@ -30,6 +30,23 @@ No data prebake. STAC items are fetched live from
 `data.source.coop` CORS-open subset, then handed to
 `MosaicLayer`.
 
+## What the app does
+
+Two render modes selectable from the in-app panel:
+
+- **RGB** — natural-color composite from `B04/B03/B02`, with a log-spaced
+  brightness slider (`LinearRescale.rescaleMax`, 0.003–0.2 in r16unorm
+  units; default 0.05 ≈ TCI brightness).
+- **NDVI** — `(B08 − B04) / (B08 + B04)` computed in a shader module,
+  rescaled to [0,1], sampled through a colormap. Three colormap options
+  exposed: cividis, viridis, plasma.
+
+A year dropdown (2022 / 2023 / 2024) drives the STAC `datetime` filter.
+The collection advertises 2018–2021 too but those items live on a
+non-CORS bucket (`ei-imagery.s3.us-east-2`), so they're filtered out
+upstream. See `docs/MULTICOG_NDVI.md` for the full design notes and the
+upstream patterns we leaned on.
+
 ## Changing the area of interest
 
 The AOI is encoded as two values near the top of `web/src/App.tsx`:
@@ -47,117 +64,163 @@ say something like:
 > *show me California, zoomed to the central valley*
 >
 > *try Vietnam and a big area around*
+>
+> *switch to ndvi and use viridis*
+>
+> *can we add a built-up index*
 
-Claude will update `STAC_BBOX`, `initialViewState`, and (if appropriate)
-`minZoom`, and HMR will pick it up.
+Claude will update `STAC_BBOX`, `initialViewState`, render modes,
+shaders, or UI as appropriate, and HMR will pick it up.
 
 The same conversational approach is how the rest of this app got built
 — render pipeline wiring, retry/backoff, the in-app failure scoreboard,
-the basemap swap. See the project [`CLAUDE.md`](./CLAUDE.md) and the
-`.claude/memory/` directory for the context Claude was working with.
+the basemap swap, the multi-band swap, the NDVI/colormap UI. See the
+project [`CLAUDE.md`](./CLAUDE.md), [`docs/MULTICOG_NDVI.md`](./docs/MULTICOG_NDVI.md),
+and the `.claude/memory/` directory for the context Claude was working
+with.
 
 ## Architecture
 
 ```
 stac.earthgenome.org  ──┐
-   STAC /search          │  runtime fetch on mount  (src/stac.ts)
+   STAC /search          │  runtime fetch on mount (src/stac.ts)
                          ▼
                   PartialSTACItem[]  →  MosaicLayer
                                               │
+                                              ▼ per STAC item in viewport
+                                      MultiCOGLayer
+                                       (B04/B03/B02 for RGB,
+                                        B08/B04 for NDVI)
+                                              │
                                               ▼ per visible map tile
-                                       COGLayer (one per source)
+                                      RasterTileLayer (internal)
                                               │
                                               ▼ HTTP Range
-                          data.source.coop/earthgenome/.../TCI.tif
+                          data.source.coop/earthgenome/.../{Bnn}.tif
                                               │
                                               ▼
-                          getTileData  (decode + RGBA upload)
+                                CompositeBands  (auto-prepended)
                                               │
                                               ▼
-                          renderTile  (CreateTexture → discardBlack)
+                          discardBoundlessPadding
+                                  → NdviFromRG?  → LinearRescale  → Colormap?
 ```
+
+`MultiCOGLayer` opens its own GeoTIFFs (one per band slot) and uploads
+each as a `r16unorm` texture. The `composite` prop maps named slots to
+RGB channels before the user pipeline runs.
 
 ### Files of note
 
-| file                          | role                                                      |
-|-------------------------------|-----------------------------------------------------------|
-| `web/src/App.tsx`             | map shell, layer wiring, retry, in-app failure scoreboard |
-| `web/src/stac.ts`             | STAC `/search` paginator, CORS-host filter                |
-| `web/src/loadGeotiff.ts`      | `GeoTIFF.fromUrl` + HEAD preflight workaround             |
-| `web/src/getTileData.ts`      | per-tile decode, RGBA pad, GPU upload, range-fetch retry  |
-| `web/src/renderTile.ts`       | shader pipeline: `CreateTexture` → `discardBlack`         |
-| `web/src/discardBlack.ts`     | luma.gl module that discards the (0,0,0) no-data fill     |
+| file                          | role                                                            |
+|-------------------------------|-----------------------------------------------------------------|
+| `web/src/App.tsx`             | map shell, mode/year/brightness/colormap state, layer wiring    |
+| `web/src/stac.ts`             | STAC `/search` paginator, CORS-host filter, required-band check |
+| `web/src/renderPipeline.ts`   | per-mode `sources`, `composite`, and shader-module pipeline     |
+| `web/src/shaders/ndvi.ts`     | `NdviFromRG` — `(r-g)/(r+g)` over post-composite color          |
+| `web/src/discardBlack.ts`     | `discardBoundlessPadding` — drops MultiCOG's zero-padded edges  |
+| `docs/MULTICOG_NDVI.md`       | design notes + upstream-example findings                        |
 
 ## Stack
 
 - [`@developmentseed/deck.gl-geotiff`](https://github.com/developmentseed/deck.gl-geotiff)
-  — `MosaicLayer` + `COGLayer`.
+  — `MosaicLayer` + `MultiCOGLayer`.
 - [`@developmentseed/deck.gl-raster`](https://github.com/developmentseed/deck.gl-raster)
-  — shader pipeline building blocks (`CreateTexture`, etc.).
+  — shader-pipeline building blocks (`CompositeBands`, `LinearRescale`,
+    `Colormap`, the shipped `colormaps.png` sprite).
 - [`@developmentseed/geotiff`](https://github.com/developmentseed/geotiff)
   — COG reader and decode worker pool.
 - [`@developmentseed/proj`](https://github.com/developmentseed/proj)
-  — EPSG resolver (not strictly needed here since the collection is
-    EPSG:3857 already, but `COGLayer` wants one).
+  — EPSG resolver (collection is EPSG:3857 already, but the layers
+    want one).
 - [`@chunkd/source-http`](https://github.com/linz/chunkd) — HTTP Range
-  source under the hood (`loadGeotiff.ts` works around a regression in
-  the size-discovery path).
+  source under the hood.
 - deck.gl 9.3 + luma.gl 9.3 + maplibre-gl 5 + react-map-gl 8 + React 19.
 
 **Please check the latest from those Dev Seed repos before you start
 developing** — the `0.7` line is moving fast, the shader-pipeline shape
 has changed across minor versions, and the working snippet in this app
-is pinned to specific versions. The handoff doc in this repo
-(`HANDOFF-FROM-CDL.md`) shows what "the render pipeline is wired
-correctly" looks like at this pin set.
+is pinned to specific versions.
 
 ## Data shape
 
 Items are `MGRSTILE_YYYY-MM-DD_YYYY-MM-DD` (e.g. `31UFT_2024-04-01_2024-08-01`).
-Each item has assets `B01..B12`, `B8A` (single-band per Sentinel-2 band)
-plus `TCI` (3-band RGB visualization composite). The app uses `TCI`
-because it's the lowest-friction path to pixels.
+Each item has assets `B01..B12`, `B8A` (single-band uint16 reflectance per
+Sentinel-2 band) plus `TCI` (3-band uint8 RGB visualization composite).
+The app uses **B02/B03/B04/B08** for RGB and NDVI rendering; TCI is no
+longer wired in but `stac.ts` still requires its href as a sentinel that
+the item is renderable.
 
-- CRS: EPSG:3857.
-- Per-tile pixel layout: pixel-interleaved 3-band uint8, padded to RGBA
-  on upload (WebGPU sampled textures need 4 channels).
-- No-data fill: `(0,0,0)` — the `discardBlack` shader module drops it so
-  the basemap shows through.
+- CRS: EPSG:3857 (all bands; verified via `gdalinfo /vsicurl/...`).
+- Per-band texture format: `r16unorm` — sampler returns `raw / 65535`
+  in `[0,1]`. The default RGB stretch of `rescaleMax: 0.05` ≈ 3000 raw.
+- No-data fill: `MultiCOGLayer` calls `fetchTile(..., boundless: true)`
+  internally, so out-of-COG pixels arrive as real zeros. The
+  `discardBoundlessPadding` module at the front of the pipeline drops
+  them so adjacent MGRS tiles don't show black seams.
 
 ## Footguns
 
+- **`sources` is reference-compared.** `MultiCOGLayer` does
+  `props.sources !== oldProps.sources` (`multi-cog-layer.ts:309`) and on
+  any mismatch reopens GeoTIFFs and refetches tiles. Rebuilding the
+  sources object inline in `renderSource` causes a full refetch on every
+  React render — including brightness-slider ticks. We cache per
+  `(mode, source.id)` in `App.tsx`.
+- **`updateTriggers.renderTile` is mandatory** for any prop change that
+  should affect already-rendered tiles. Without it, `RasterTileLayer`
+  caches the per-tile `RenderTileResult` and the new pipeline never
+  reaches the GPU (`raster-tile-layer.ts:338`).
+- **`boundless: true` zero padding.** The old TCI path used our own
+  `getTileData` with `boundless: false` plus a `discardBlack` shader.
+  `MultiCOGLayer`'s internal `fetchTile` is hardcoded to
+  `boundless: true`, so the new path needs `discardBoundlessPadding`
+  (or equivalent) up front.
+- **MGRS tile gaps at low zoom.** Each MGRS item gets its own inner
+  `TileLayer`, so adjacent items' tile grids don't share edges in
+  mercator. Cross-UTM-zone seams (e.g. 31N / 32N at 6°E) are wider
+  because the MGRS tiles themselves are defined in their respective UTM
+  zones. Live with it, or pad with a darker basemap. See
+  `docs/MULTICOG_NDVI.md` for the architectural reason.
 - **Source count > file size.** A 400 MB COG and a 5 MB COG cost the
   same memory if the visible-tile count and overview level are the
   same. The real cost driver is "how many sources are visible" — i.e.
-  MGRS-tile count inside the viewport.
+  MGRS-tile count inside the viewport. RGB pulls 3 band COGs per item;
+  NDVI pulls 2.
 - **CORS.** Only `data.source.coop` is verified open. The collection
   also publishes annual mosaics on `ei-imagery.s3.us-east-2`, which is
   CORS-blocked from the browser; `stac.ts` filters those out so they
-  don't 403-spam the console.
+  don't 403-spam the console. Net effect: only 2022–2024 are visible.
 - **STAC pagination.** `fetchStacItems` follows `rel=next` to
   exhaustion (capped by `maxItems`). Wide global bboxes will be slow on
   first paint; narrow the bbox or raise `minZoom`.
-- **MosaicLayer maxCacheSize=0.** Header data lives in the module-level
-  `geotiffCache` in `App.tsx`, not in the TileLayer cache. Don't
-  rewrite that without understanding why.
 
 ## What's not here
 
 The CDL predecessor app had palette LUTs, per-class histograms, pixel
 picking, EPSG:5070 → 3857 reprojection in-shader, and a bake step for
-STAC. None of that is needed for TCI — Sentinel-2 TCI is already a
-display-ready uint8 RGB composite in Web Mercator. The git history of
-the predecessor (`cdl-lonboard-05-2026`) has all of it if it's ever
+STAC. None of that is needed for Sentinel-2 — the bands are already in
+Web Mercator and the composites/indices are GPU-side. The git history
+of the predecessor (`cdl-lonboard-05-2026`) has all of it if it's ever
 needed back.
+
+A few files from the original TCI-only wiring (`loadGeotiff.ts`,
+`getTileData.ts`, `renderTile.ts`) are still in the repo but no longer
+imported by `App.tsx`. They're kept as reference for the per-tile
+custom-loader pattern in case we ever go back to single-COG-per-item.
 
 ## Memory & context
 
 - [`CLAUDE.md`](./CLAUDE.md) — project-wide instructions Claude was
   working under.
+- [`docs/MULTICOG_NDVI.md`](./docs/MULTICOG_NDVI.md) — design notes for
+  the MultiCOG/NDVI swap, including findings from the upstream
+  deck.gl-raster examples (naip-mosaic for the NDVI live-filter
+  pattern, vermont for the same NDVI math, sentinel-2 for the multi-
+  band composite presets).
 - [`.claude/memory/`](./.claude/memory/) — running notes Claude kept,
   including the carryover from the CDL predecessor
   (`PRIOR_CDL_MEMORY.md`) and a stack/footgun retrospective
-  (`MEMORY.md`). Checked in deliberately so the next person (or the
-  next Claude session) can pick up cold.
+  (`MEMORY.md`).
 - [`HANDOFF-FROM-CDL.md`](./HANDOFF-FROM-CDL.md) — the
   diagnosis/fix note that bootstrapped this app off the CDL scaffold.

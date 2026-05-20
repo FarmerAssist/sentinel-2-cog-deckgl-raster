@@ -166,3 +166,85 @@ Not in v1 but cheap to add: clone naip-mosaic's `ndviFilter` module with
 - **Composite slot order matters for our NDVI shader.** `composite:
   { r: 'nir', g: 'red' }` puts NIR in `color.r`. Swap and the math
   inverts. Keep the names obvious.
+
+## Things learned the hard way after first ship
+
+Captured here so the next iteration doesn't re-burn the time.
+
+### `boundless: true` is hardcoded in MultiCOG
+
+`MultiCOGLayer._fetchPrimaryBand` / `_fetchSecondaryBand` both call
+`image.fetchTile(..., boundless: true)` (`multi-cog-layer.ts:627, 724`).
+Out-of-COG pixels arrive as real zeros. The old TCI path used our own
+`getTileData` with `boundless: false` plus a `discardBlack` shader — both
+protections. Without them, every MGRS tile gets a black border. Fix:
+`discardBoundlessPadding` at the front of the render pipeline (`src/
+discardBlack.ts`). Threshold `0.00005` ≈ 2× r16unorm step, low enough that
+deep water survives.
+
+### `updateTriggers.renderTile` is mandatory for live UI
+
+`RasterTileLayer` wires `updateTriggers: { renderSubLayers:
+updateTriggers?.renderTile }` (`raster-tile-layer.ts:338`). Without
+threading `updateTriggers.renderTile` through `MultiCOGLayer`, the inner
+`TileLayer` caches each tile's `RenderTileResult` forever and prop
+changes (brightness, colormap, mode) never reach the GPU. We pass
+`[mode, rgbRescaleMax, ndviColormap, colormapTexture]` as the trigger.
+
+### `sources` is reference-compared
+
+`MultiCOGLayer.updateState` does `props.sources !== oldProps.sources`
+(`multi-cog-layer.ts:309`) and on mismatch **resets internal state** —
+reopens GeoTIFFs, refetches every tile. Constructing the `sources` record
+inline in `renderSource` produces a new object every render, so every
+brightness-slider tick was kicking off a full refetch. Fix:
+`useRef(new Map<...>())` keyed by `(mode, source.id)` so the same
+reference is reused across non-source changes (`App.tsx`).
+
+Symptom while debugging: brightness slider visibly worked but tiles
+flickered/reloaded; network panel showed the same B0n COG URLs hit
+repeatedly per slider tick.
+
+### MGRS gaps are architectural, not configurable
+
+Each item's `MultiCOGLayer` has its own inner `TileLayer` bound to that
+COG's extent (`_tilesetDescriptor` returns the primary band's descriptor).
+Adjacent items' tile grids don't share edges in mercator. Cross-UTM-zone
+seams (e.g. 31N / 32N at 6°E) are wider because MGRS tiles are defined
+in their respective UTM zones — they don't tile cleanly in mercator at
+all. Upstream has no example combining `MosaicLayer` with
+`MultiCOGLayer`; we're the first.
+
+Options if it ever becomes a real problem:
+1. Live with it + use a dark basemap so the seams read as imagery edges.
+2. Re-tile to a shared mercator grid offline (defeats the project's
+   "no prebake" premise).
+3. Fork `MultiCOGLayer` to share a tile grid across items (real work).
+
+### CRS verified uniform via `gdalinfo /vsicurl/`
+
+Earlier hypothesis was TCI in mercator, B0n in UTM. `gdalinfo` over each
+asset's URL confirmed all assets are EPSG:3857 with identical origin,
+pixel size (`19.109m`), and dimensions (`9984 × 9984`). Same overview
+pyramid too (6 levels down to 156×156). So the rendering differences
+between paths are purely software-layer differences, not data ones.
+
+### Year coverage on CORS-open hosts
+
+Collection metadata claims temporal extent 2018-01 → 2024-01, but at
+`bbox = wide Netherlands area`:
+
+| year | items |
+|------|-------|
+| 2020 | 0     |
+| 2021 | 0     |
+| 2022 | 77    |
+| 2023 | 154   |
+| 2024 | 77    |
+
+The 2018–2021 items live on `ei-imagery.s3.us-east-2`, which is
+CORS-blocked; `stac.ts` filters them out. The year dropdown only offers
+2022/2023/2024 for that reason. 2023 has ~2× items because the producer
+shipped four overlapping seasonal composites (`*_2023-01_2023-05`,
+`2023-04_2023-08`, etc.) that year. Visually that means more redundancy,
+not better coverage.

@@ -22,15 +22,25 @@ import { fetchStacItems, type PartialSTACItem } from "./stac";
 import {
   buildRenderPipeline,
   COMPOSITE,
+  DEFAULT_NDVI_COLORMAP,
   DEFAULT_RGB_RESCALE_MAX,
+  NDVI_COLORMAPS,
   SOURCE_BANDS,
+  type NdviColormap,
   type RenderMode,
 } from "./renderPipeline";
 
-const STAC_DATETIME = "2024-01-01T00:00:00Z/2024-12-31T23:59:59Z";
-const STAC_YEAR = 2024;
-// St Petersburg, RU — wide area (Gulf of Finland → Lake Ladoga, Estonia → Karelia)
-const STAC_BBOX: [number, number, number, number] = [22.0, 57.0, 36.0, 62.5];
+// Years with CORS-open coverage on data.source.coop. The STAC collection
+// advertises 2018–2021 too but those items are hosted on a non-CORS bucket
+// (filtered out by stac.ts CORS_OK_HOSTS).
+const AVAILABLE_YEARS = [2022, 2023, 2024] as const;
+const DEFAULT_YEAR = 2023;
+// Netherlands — wide area
+const STAC_BBOX: [number, number, number, number] = [1.5, 49.5, 8.5, 54.5];
+
+function yearToDatetime(year: number): string {
+  return `${year}-01-01T00:00:00Z/${year}-12-31T23:59:59Z`;
+}
 
 type LoadStats = { loaded: number; failed: number; failures: { url: string; err: string }[] };
 
@@ -55,11 +65,20 @@ function DeckGLOverlay({
 
 export default function App() {
   const mapRef = useRef<MapRef>(null);
+  // Cache MultiCOGLayer `sources` records per (mode, source.id) so the SAME
+  // object reference is reused across brightness / colormap changes. MultiCOG
+  // checks `props.sources !== oldProps.sources` (multi-cog-layer.ts:309) and
+  // resets internal state on any mismatch — i.e. reopens GeoTIFFs and refetches
+  // tiles. Passing a fresh object each render was forcing a full refetch on
+  // every slider tick.
+  const sourcesCache = useRef(new Map<string, Record<string, { url: string }>>());
   const [labelBeforeId, setLabelBeforeId] = useState<string | undefined>(undefined);
   const [stacItems, setStacItems] = useState<PartialSTACItem[]>([]);
   const [stacError, setStacError] = useState<string | null>(null);
   const [mode, setMode] = useState<RenderMode>("rgb");
+  const [year, setYear] = useState<number>(DEFAULT_YEAR);
   const [rgbRescaleMax, setRgbRescaleMax] = useState<number>(DEFAULT_RGB_RESCALE_MAX);
+  const [ndviColormap, setNdviColormap] = useState<NdviColormap>(DEFAULT_NDVI_COLORMAP);
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapTexture, setColormapTexture] = useState<Texture | null>(null);
   const stats: LoadStats = { loaded: 0, failed: 0, failures: [] };
@@ -86,10 +105,12 @@ export default function App() {
 
   useEffect(() => {
     const ac = new AbortController();
-    fetchStacItems({ datetime: STAC_DATETIME, bbox: STAC_BBOX, signal: ac.signal })
+    setStacItems([]);
+    setStacError(null);
+    fetchStacItems({ datetime: yearToDatetime(year), bbox: STAC_BBOX, signal: ac.signal })
       .then((items) => {
         setStacItems(items);
-        console.info(`[stac] ${items.length} items for ${STAC_YEAR}`);
+        console.info(`[stac] ${items.length} items for ${year}`);
       })
       .catch((err) => {
         if (err.name !== "AbortError") {
@@ -98,7 +119,7 @@ export default function App() {
         }
       });
     return () => ac.abort();
-  }, []);
+  }, [year]);
 
   const layers = useMemo(() => {
     if (stacItems.length === 0) return [];
@@ -106,7 +127,10 @@ export default function App() {
 
     const bandSlots = SOURCE_BANDS[mode];
     const composite = COMPOSITE[mode];
-    const pipeline = buildRenderPipeline(mode, colormapTexture, { rgbRescaleMax });
+    const pipeline = buildRenderPipeline(mode, colormapTexture, {
+      rgbRescaleMax,
+      ndviColormap,
+    });
 
     const mosaic = new MosaicLayer<PartialSTACItem, null>({
       id: `s2-mosaic-${mode}`,
@@ -115,12 +139,17 @@ export default function App() {
       // item's bbox (used internally for spatial indexing).
       getSource: async () => null,
       renderSource: (source) => {
-        const sources = Object.fromEntries(
-          Object.entries(bandSlots).map(([slot, bandKey]) => [
-            slot,
-            { url: source.assets[bandKey].href },
-          ]),
-        );
+        const cacheKey = `${mode}-${source.id}`;
+        let sources = sourcesCache.current.get(cacheKey);
+        if (!sources) {
+          sources = Object.fromEntries(
+            Object.entries(bandSlots).map(([slot, bandKey]) => [
+              slot,
+              { url: source.assets[bandKey].href },
+            ]),
+          );
+          sourcesCache.current.set(cacheKey, sources);
+        }
         return new MultiCOGLayer({
           id: `s2-multi-${mode}-${source.id}`,
           sources,
@@ -132,7 +161,7 @@ export default function App() {
           // Without this, brightness/colormap prop changes never reach
           // already-rendered tiles.
           updateTriggers: {
-            renderTile: [mode, rgbRescaleMax, colormapTexture],
+            renderTile: [mode, rgbRescaleMax, ndviColormap, colormapTexture],
           },
         } as any);
       },
@@ -140,12 +169,12 @@ export default function App() {
       beforeId: labelBeforeId,
     });
     return [mosaic];
-  }, [stacItems, labelBeforeId, mode, colormapTexture, rgbRescaleMax]);
+  }, [stacItems, labelBeforeId, mode, colormapTexture, rgbRescaleMax, ndviColormap]);
 
   const initialViewState = {
-    longitude: 30.3,
-    latitude: 59.9,
-    zoom: 6.0,
+    longitude: 5.3,
+    latitude: 52.1,
+    zoom: 6.5,
     pitch: 0,
     bearing: 0,
   };
@@ -168,13 +197,17 @@ export default function App() {
       </MaplibreMap>
       <InfoPanel
         sourceCount={stacItems.length}
-        year={STAC_YEAR}
+        year={year}
+        availableYears={AVAILABLE_YEARS}
+        onYearChange={setYear}
         error={stacError}
         stats={stats}
         mode={mode}
         onModeChange={setMode}
         rgbRescaleMax={rgbRescaleMax}
         onRgbRescaleMaxChange={setRgbRescaleMax}
+        ndviColormap={ndviColormap}
+        onNdviColormapChange={setNdviColormap}
       />
     </div>
   );
@@ -183,21 +216,29 @@ export default function App() {
 function InfoPanel({
   sourceCount,
   year,
+  availableYears,
+  onYearChange,
   error,
   stats,
   mode,
   onModeChange,
   rgbRescaleMax,
   onRgbRescaleMaxChange,
+  ndviColormap,
+  onNdviColormapChange,
 }: {
   sourceCount: number;
   year: number | null;
+  availableYears: readonly number[];
+  onYearChange: (y: number) => void;
   error: string | null;
   stats: LoadStats;
   mode: RenderMode;
   onModeChange: (m: RenderMode) => void;
   rgbRescaleMax: number;
   onRgbRescaleMaxChange: (v: number) => void;
+  ndviColormap: NdviColormap;
+  onNdviColormapChange: (c: NdviColormap) => void;
 }) {
   const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
   const copyFailures = () => {
@@ -224,23 +265,28 @@ function InfoPanel({
         WebkitUserSelect: "text",
       }}
     >
-      <div style={{ fontWeight: 600, fontSize: 14 }}>
+      <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 8 }}>
         Sentinel-2 Temporal Mosaic
-        {year != null && (
-          <span
-            style={{
-              marginLeft: 8,
-              fontSize: 11,
-              fontWeight: 500,
-              padding: "2px 6px",
-              background: "rgba(255,255,255,0.12)",
-              borderRadius: 3,
-              verticalAlign: "middle",
-            }}
-          >
-            {year}
-          </span>
-        )}
+        <select
+          value={year ?? ""}
+          onChange={(e) => onYearChange(Number(e.target.value))}
+          style={{
+            fontSize: 11,
+            fontWeight: 500,
+            padding: "2px 6px",
+            background: "rgba(255,255,255,0.12)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 3,
+            color: "white",
+            cursor: "pointer",
+          }}
+        >
+          {availableYears.map((y) => (
+            <option key={y} value={y} style={{ background: "#222" }}>
+              {y}
+            </option>
+          ))}
+        </select>
       </div>
       <div style={{ opacity: 0.65, fontSize: 11, marginTop: 4 }}>
         {error
@@ -272,6 +318,33 @@ function InfoPanel({
           </button>
         ))}
       </div>
+      {mode === "ndvi" && (
+        <div style={{ marginTop: 8, display: "flex", gap: 4 }}>
+          {NDVI_COLORMAPS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => onNdviColormapChange(c)}
+              style={{
+                padding: "3px 8px",
+                fontSize: 10,
+                borderRadius: 3,
+                border: "1px solid rgba(255,255,255,0.3)",
+                background:
+                  ndviColormap === c
+                    ? "rgba(255,255,255,0.25)"
+                    : "rgba(255,255,255,0.05)",
+                color: "white",
+                cursor: "pointer",
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+              }}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+      )}
       {mode === "rgb" && (
         <div style={{ marginTop: 8, fontSize: 11 }}>
           <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.8 }}>

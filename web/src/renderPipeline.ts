@@ -13,6 +13,10 @@ export type RenderMode = "rgb" | "ndvi";
 /** Default RGB stretch ceiling in r16unorm units. 0.05 ≈ 3000 raw, TCI-ish. */
 export const DEFAULT_RGB_RESCALE_MAX = 0.05;
 
+export const NDVI_COLORMAPS = ["cividis", "viridis", "plasma"] as const;
+export type NdviColormap = (typeof NDVI_COLORMAPS)[number];
+export const DEFAULT_NDVI_COLORMAP: NdviColormap = "cividis";
+
 /**
  * Source slot mapping fed to MultiCOGLayer for each mode.
  * Keys become band names; values are the STAC asset keys to pull URLs from.
@@ -31,7 +35,7 @@ export const COMPOSITE: Record<RenderMode, { r: string; g?: string; b?: string }
 export function buildRenderPipeline(
   mode: RenderMode,
   colormapTexture: Texture | null,
-  opts: { rgbRescaleMax?: number } = {},
+  opts: { rgbRescaleMax?: number; ndviColormap?: NdviColormap } = {},
 ): RasterModule[] {
   if (mode === "rgb") {
     // MultiCOGLayer uploads uint16 bands as r16unorm → sampler returns
@@ -58,7 +62,7 @@ export function buildRenderPipeline(
       module: Colormap,
       props: {
         colormapTexture,
-        colormapIndex: COLORMAP_INDEX.cividis,
+        colormapIndex: COLORMAP_INDEX[opts.ndviColormap ?? DEFAULT_NDVI_COLORMAP],
         reversed: false,
       },
     },
