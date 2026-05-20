@@ -145,6 +145,29 @@ Not in v1 but cheap to add: clone naip-mosaic's `ndviFilter` module with
 `ndviMin`/`ndviMax` uniforms and a `discard` test, drop it in between
 `NdviFromRG` and `LinearRescale`, wire to a `<input type="range">` pair.
 
+### TODO: real-time vegetation segmentation
+
+A natural next step from the live `discard` filter above. The same
+shader-level approach — threshold NDVI per fragment, keep what passes —
+is the cheapest form of real-time vegetation segmentation: vegetation =
+visible, non-vegetation = transparent (basemap shows through). The
+filter range becomes the segmentation threshold. Add a smoothing /
+morphological step in the shader if the per-pixel mask is too noisy at
+high zoom.
+
+Prior art: there's a Fused UDF that does this against Esri's basemap.
+That uses higher-resolution imagery than Sentinel-2 (sub-meter vs. 10
+m), so the segmentation is more precise and the field boundaries are
+crisp. The S2 version here would be coarser but live across the whole
+collection and tunable interactively — different tradeoff.
+
+Likely shape if we build it:
+- Reuse the NDVI pipeline; add an `ndviSegmentationThreshold` uniform.
+- Discard when NDVI < threshold (or symmetric range for non-veg mask).
+- Optionally write the mask to a 1-channel offscreen target so a second
+  pass can dilate/erode it.
+- UI: single threshold slider + a "show mask only / overlay on RGB" toggle.
+
 ## Footguns / unknowns
 
 - **B0n format.** Need to confirm Earth Genome publishes B02/B03/B04/B08 as
