@@ -21,6 +21,18 @@ the existing `MultiCOGLayer` composite path. Adding one is a one-line entry in
 > scene. NDVI and NDWI are clean because all their bands are 10 m. To bring SWIR
 > indices back you'd need to resample/snap B11 to the 10 m grid first (or accept
 > the `discardBoundlessPadding`-on-either-band gaps along those edges).
+>
+> Reproduce the diagnosis with **`scripts/check_band_grids.sh`** (gdalinfo band
+> grids). Captured for item `12SUC_2023-01-01_2024-01-01`:
+>
+> | band | size | pixel | UL x | nodata |
+> |------|------|-------|------|--------|
+> | B04 | 14336² | 9.55 m | −12599268.2 | 0 |
+> | B08 | 14336² | 9.55 m | −12599268.2 | 0 |
+> | B11 | 7424×7168 | 19.11 m | −12601714.2 | 0 |
+>
+> B08/B04 share a pixel-identical grid; B11 is half-res with a shifted, larger
+> extent — different footprint ⇒ seams.
 
 How it works:
 - `INDICES[k]` declares `{ a, b }` band slots. `bandSlotsFor` maps them to STAC
