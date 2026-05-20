@@ -1,14 +1,15 @@
 import {
+  COGLayer,
   MosaicLayer,
   MultiCOGLayer,
 } from "@developmentseed/deck.gl-geotiff";
-import { BitmapLayer } from "@deck.gl/layers";
 import {
   createColormapTexture,
   decodeColormapSprite,
 } from "@developmentseed/deck.gl-raster/gpu-modules";
 import colormapsPngUrl from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png";
 import { epsgResolver } from "@developmentseed/proj";
+import type { GeoTIFF } from "@developmentseed/geotiff";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import type { Device, Texture } from "@luma.gl/core";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -20,19 +21,45 @@ import {
 import type { MapRef } from "react-map-gl/maplibre";
 
 import { fetchStacItems, type PartialSTACItem } from "./stac";
-import { getOverviewImage } from "./overviewMosaic";
+import { loadGeoTIFF } from "./loadGeotiff";
+import { getTileData, type S2TileData } from "./getTileData";
+import { renderTile } from "./renderTile";
 import {
   buildRenderPipeline,
   COMPOSITE,
   DEFAULT_NDVI_COLORMAP,
   DEFAULT_NDVI_RANGE,
   DEFAULT_NDVI_SCALE,
-  DEFAULT_RGB_RESCALE_MAX,
   NDVI_COLORMAPS,
   SOURCE_BANDS,
   type NdviColormap,
   type RenderMode,
 } from "./renderPipeline";
+
+// RGB renders the precomposed 8-bit TCI COG via COGLayer; brightness is a
+// uniform ScaleColor gain (1.0 = faithful TCI), not a raw-band rescale.
+const DEFAULT_RGB_GAIN = 1.0;
+
+/**
+ * Module-level cache of opened TCI GeoTIFFs keyed by URL (mirrors the
+ * deck.gl-raster naip-mosaic example). Header reads are small; the GeoTIFF
+ * instance is reused for the app's lifetime and shared across concurrent
+ * callers via the cached promise. Kept outside MosaicLayer's TileLayer cache
+ * so cheap header metadata isn't pinned to parent-tile lifetime. Uses our
+ * loadGeoTIFF wrapper for the chunkd HEAD-size workaround. Evicts on rejection.
+ */
+const geotiffCache = new Map<string, Promise<GeoTIFF>>();
+function getCachedGeoTIFF(url: string): Promise<GeoTIFF> {
+  let p = geotiffCache.get(url);
+  if (!p) {
+    p = loadGeoTIFF(url).catch((err) => {
+      geotiffCache.delete(url);
+      throw err;
+    });
+    geotiffCache.set(url, p);
+  }
+  return p;
+}
 
 // Years with CORS-open coverage on data.source.coop. The STAC collection
 // advertises 2018–2021 too but those items are hosted on a non-CORS bucket
@@ -89,17 +116,13 @@ export default function App() {
   const [stacError, setStacError] = useState<string | null>(null);
   const [mode, setMode] = useState<RenderMode>("rgb");
   const [year, setYear] = useState<number>(DEFAULT_YEAR);
-  const [rgbRescaleMax, setRgbRescaleMax] = useState<number>(DEFAULT_RGB_RESCALE_MAX);
+  const [rgbGain, setRgbGain] = useState<number>(DEFAULT_RGB_GAIN);
   const [ndviColormap, setNdviColormap] = useState<NdviColormap>(DEFAULT_NDVI_COLORMAP);
   const [ndviRange, setNdviRange] = useState<[number, number]>(DEFAULT_NDVI_RANGE);
   const [ndviScale, setNdviScale] = useState<number>(DEFAULT_NDVI_SCALE);
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapTexture, setColormapTexture] = useState<Texture | null>(null);
   const [labels, setLabels] = useState(false);
-  const [overview, setOverview] = useState(false);
-  const [overviewImages, setOverviewImages] = useState<Map<string, ImageBitmap>>(
-    () => new Map(),
-  );
   const stats: LoadStats = { loaded: 0, failed: 0, failures: [] };
 
   const mapStyle = labels
@@ -158,60 +181,47 @@ export default function App() {
     return () => ac.abort();
   }, [year]);
 
-  // Overview mode: decode each item's coarsest TCI overview into a BitmapLayer
-  // image. Seamless (one reprojected quad per item) but RGB/TCI only. Loads
-  // progressively into a state Map so layers fill in as decodes finish.
-  useEffect(() => {
-    if (!overview || stacItems.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      for (const item of stacItems) {
-        if (cancelled) break;
-        if (overviewImages.has(item.id)) continue;
-        try {
-          const img = await getOverviewImage(item.assets.visual.href);
-          if (cancelled) break;
-          setOverviewImages((prev) => {
-            if (prev.has(item.id)) return prev;
-            const next = new Map(prev);
-            next.set(item.id, img);
-            return next;
-          });
-        } catch (err) {
-          console.warn(`[overview] failed ${item.id}`, err);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // overviewImages intentionally omitted: we read it for the has() skip but
-    // don't want the effect to re-run on every image that lands.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overview, stacItems]);
-
   const layers = useMemo(() => {
     if (stacItems.length === 0) return [];
 
-    if (overview) {
-      return stacItems
-        .filter((it) => overviewImages.has(it.id))
-        .map(
-          (it) =>
-            new BitmapLayer({
-              id: `s2-overview-${it.id}`,
-              image: overviewImages.get(it.id)!,
-              bounds: it.bbox, // [W, S, E, N]
-              beforeId: labelBeforeId,
-            } as any),
-        );
+    // RGB: render the single precomposed 3-band TCI COG per item through
+    // COGLayer (the deck.gl-raster naip-mosaic pattern). One COG per item, so
+    // no cross-band-file misregistration — this is what kills the seams that
+    // the old MultiCOGLayer (separate B04/B03/B02 files) produced. See
+    // docs/SEAMS.md.
+    if (mode === "rgb") {
+      const mosaic = new MosaicLayer<PartialSTACItem, GeoTIFF>({
+        id: `s2-mosaic-rgb-${gen}`,
+        sources: stacItems,
+        maxCacheSize: 0,
+        getSource: (source) => getCachedGeoTIFF(source.assets.visual.href),
+        renderSource: (source, { data }) =>
+          new COGLayer<S2TileData>({
+            id: `s2-cog-rgb-${gen}-${source.id}`,
+            geotiff: data,
+            epsgResolver,
+            getTileData,
+            renderTile: (tileData: S2TileData) => renderTile(tileData, rgbGain),
+            signal: genSignal,
+            refinementStrategy: "best-available",
+            maxRequests: 16,
+            // ScaleColor gain is closed over rgbGain; retrigger the cached
+            // per-tile renderPipeline when it changes.
+            updateTriggers: { renderTile: [rgbGain] },
+          } as any),
+        // @ts-expect-error beforeId is injected by @deck.gl/mapbox
+        beforeId: labelBeforeId,
+      });
+      return [mosaic];
     }
-    if (mode === "ndvi" && !colormapTexture) return [];
+
+    // NDVI: needs the B08/B04 ratio, so keep the MultiCOGLayer composite path.
+    // NDVI is inherently seam-free (the ratio cancels per-edge offsets).
+    if (!colormapTexture) return [];
 
     const bandSlots = SOURCE_BANDS[mode];
     const composite = COMPOSITE[mode];
     const pipeline = buildRenderPipeline(mode, colormapTexture, {
-      rgbRescaleMax,
       ndviColormap,
       ndviRange,
       ndviScale,
@@ -248,17 +258,12 @@ export default function App() {
           // See docs/PERF_KNOBS.md for the full menu + drawbacks.
           refinementStrategy: "best-available",
           maxRequests: 16,
-          // NOTE: RGB shows faint tile-edge seams that NDVI's ratio hides.
-          // Tested maxError:0.01 (tighter reproject mesh) and
-          // refinementStrategy:"no-overlap" (no overview mixing) — neither
-          // fixed it. Root cause is the per-item independent tile grids; see
-          // docs/SEAMS.md.
           // Inner RasterTileLayer caches each tile's renderPipeline result
           // (raster-tile-layer.ts:338 wires renderTile → renderSubLayers).
-          // Without this, brightness/colormap prop changes never reach
-          // already-rendered tiles.
+          // Without this, colormap prop changes never reach already-rendered
+          // tiles.
           updateTriggers: {
-            renderTile: [mode, rgbRescaleMax, ndviColormap, ndviRange[0], ndviRange[1], ndviScale, colormapTexture],
+            renderTile: [mode, ndviColormap, ndviRange[0], ndviRange[1], ndviScale, colormapTexture],
           },
         } as any);
       },
@@ -266,7 +271,7 @@ export default function App() {
       beforeId: labelBeforeId,
     });
     return [mosaic];
-  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, rgbRescaleMax, ndviColormap, ndviRange, ndviScale, overview, overviewImages]);
+  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, rgbGain, ndviColormap, ndviRange, ndviScale]);
 
   const initialViewState = {
     longitude: -114.6,
@@ -310,8 +315,8 @@ export default function App() {
         stats={stats}
         mode={mode}
         onModeChange={setMode}
-        rgbRescaleMax={rgbRescaleMax}
-        onRgbRescaleMaxChange={setRgbRescaleMax}
+        rgbGain={rgbGain}
+        onRgbGainChange={setRgbGain}
         ndviColormap={ndviColormap}
         onNdviColormapChange={setNdviColormap}
         ndviRange={ndviRange}
@@ -320,8 +325,6 @@ export default function App() {
         onNdviScaleChange={setNdviScale}
         labels={labels}
         onLabelsChange={setLabels}
-        overview={overview}
-        onOverviewChange={setOverview}
       />
     </div>
   );
@@ -336,8 +339,8 @@ function InfoPanel({
   stats,
   mode,
   onModeChange,
-  rgbRescaleMax,
-  onRgbRescaleMaxChange,
+  rgbGain,
+  onRgbGainChange,
   ndviColormap,
   onNdviColormapChange,
   ndviRange,
@@ -346,8 +349,6 @@ function InfoPanel({
   onNdviScaleChange,
   labels,
   onLabelsChange,
-  overview,
-  onOverviewChange,
 }: {
   sourceCount: number;
   year: number | null;
@@ -357,8 +358,8 @@ function InfoPanel({
   stats: LoadStats;
   mode: RenderMode;
   onModeChange: (m: RenderMode) => void;
-  rgbRescaleMax: number;
-  onRgbRescaleMaxChange: (v: number) => void;
+  rgbGain: number;
+  onRgbGainChange: (v: number) => void;
   ndviColormap: NdviColormap;
   onNdviColormapChange: (c: NdviColormap) => void;
   ndviRange: [number, number];
@@ -367,8 +368,6 @@ function InfoPanel({
   onNdviScaleChange: (s: number) => void;
   labels: boolean;
   onLabelsChange: (v: boolean) => void;
-  overview: boolean;
-  onOverviewChange: (v: boolean) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
@@ -512,23 +511,6 @@ function InfoPanel({
         >
           labels {labels ? "on" : "off"}
         </button>
-        <button
-          type="button"
-          onClick={() => onOverviewChange(!overview)}
-          title="Seamless low-res mosaic (RGB/TCI only). Toggle off for full-res streaming."
-          style={{
-            padding: "4px 10px",
-            fontSize: 11,
-            borderRadius: 3,
-            border: "1px solid rgba(255,255,255,0.3)",
-            background: overview ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.05)",
-            color: "white",
-            cursor: "pointer",
-            letterSpacing: 0.5,
-          }}
-        >
-          overview {overview ? "on" : "off"}
-        </button>
       </div>
       {mode === "ndvi" && (
         <div style={{ marginTop: 8, fontSize: 11 }}>
@@ -608,23 +590,21 @@ function InfoPanel({
         <div style={{ marginTop: 8, fontSize: 11 }}>
           <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.8 }}>
             <span>brightness</span>
-            <span style={{ opacity: 0.6 }}>
-              max {rgbRescaleMax.toFixed(3)}
-            </span>
+            <span style={{ opacity: 0.6 }}>×{rgbGain.toFixed(2)}</span>
           </div>
-          {/* Slider value is the LOG of rescaleMax so the perceptual step is even. */}
+          {/* Uniform RGB gain on the TCI texture (1.0 = faithful). */}
           <input
             type="range"
-            min={-2.5}
-            max={-0.7}
+            min={0.4}
+            max={2.5}
             step={0.05}
-            value={Math.log10(rgbRescaleMax)}
-            onChange={(e) => onRgbRescaleMaxChange(10 ** Number(e.target.value))}
+            value={rgbGain}
+            onChange={(e) => onRgbGainChange(Number(e.target.value))}
             style={{ width: "100%", marginTop: 2 }}
           />
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, opacity: 0.5 }}>
-            <span>brighter</span>
             <span>darker</span>
+            <span>brighter</span>
           </div>
         </div>
       )}

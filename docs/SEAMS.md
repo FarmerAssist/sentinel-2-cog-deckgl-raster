@@ -1,5 +1,27 @@
 # RGB tile-edge seams (NDVI is clean)
 
+## RESOLVED (2026-05-20): render the single TCI COG via COGLayer
+
+**Fix shipped.** RGB now renders each item's precomposed 3-band **TCI** COG
+(`assets.visual`) through a single **`COGLayer`** per item under `MosaicLayer`
+— the deck.gl-raster **naip-mosaic** pattern (`getTileData` → `CreateTexture` +
+`discardBlack`). NDVI stays on `MultiCOGLayer` (needs the B08/B04 ratio; already
+seam-free).
+
+**The earlier "per-item independent tile grids" diagnosis below was wrong.**
+The naip-mosaic example mosaics dozens of independent per-item COGLayers with no
+visible seams, which disproves that theory. The actual cause was **`MultiCOGLayer`
+compositing three *separately-tiled single-band* COGs (B04/B03/B02)** whose tile
+grids / reprojection meshes don't co-register at the sub-pixel level. Rendering
+one precomposed COG per item removes that misregistration entirely.
+
+The BitmapLayer overview "Attempt 2" below was abandoned (looked worse, low-res,
+still seamed). Overview mode and the zoom-gate were removed. The investigation
+notes below are kept for history.
+
+---
+
+
 ## Symptom
 
 In **RGB** mode a faint regular grid of seams appears at tile boundaries —
@@ -82,6 +104,22 @@ and no per-tile mesh to mismatch.
 
 **Result: still seams.** So the quad-per-item idea didn't kill them. Needs
 debugging next session. Leading hypotheses, most likely first:
+
+### Fix applied (2026-05-20): precise 3857→WGS84 bounds
+
+Implemented hypothesis #1. `overviewMosaic.ts` now reads the GeoTIFF's exact
+`tiff.bbox` (EPSG:3857 meters) and reprojects the two corners to WGS84 with a
+closed-form inverse mercator (`mercToLngLat`, sphere R=6378137), returning
+those bounds with the image (`OverviewTile`). `App.tsx`'s BitmapLayer uses
+`tile.bounds` instead of the rounded STAC `item.bbox`. Because the 3857 grid
+abuts exactly and both items run the shared edge through the identical formula,
+adjacent quads now get bit-identical lng/lat edges. Guards `tiff.crs === 3857`.
+
+**Needs visual verification in-browser** (Yuma AOI, overview on) — not yet
+confirmed seam-free. If seams persist, move to hypothesis #2 (no-data edge
+ring going transparent: temporarily force alpha 255 to test).
+
+Original hypotheses, for reference:
 
 1. **`bounds = STAC item.bbox` is approximate.** The collection is gridded in
    EPSG:3857 (origin 494088…, 19.109 m px, 9984 px). Adjacent items' *3857*

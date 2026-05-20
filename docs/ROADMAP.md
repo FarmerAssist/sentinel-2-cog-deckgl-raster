@@ -1,10 +1,11 @@
 # Roadmap / TODO
 
-## Open (debug first)
+## Done
 
-- **Overview-mode seams.** The `overview` BitmapLayer path still shows seams.
-  See `docs/SEAMS.md` → "Attempt 2" for the leading fixes (precise 3857→WGS84
-  bounds; no-data edge transparency). This blocks calling overview mode "done."
+- **RGB seams fixed (2026-05-20).** RGB renders the single TCI COG per item via
+  `COGLayer` (naip-mosaic pattern); see `docs/SEAMS.md` → "RESOLVED". The
+  BitmapLayer overview mode + zoom-gate were dropped (looked worse, still
+  seamed). Brightness is now a uniform `ScaleColor` gain on the TCI texture.
 
 ## TODO: natural-language place loader ("LLM geocode + marker")
 
@@ -34,22 +35,17 @@ hand-editing `STAC_BBOX` / `initialViewState` in `App.tsx`.
 ### "Load >=100 tiles at a time"
 
 The current eager-load path melts past ~1000 items and grinds in the hundreds
-(see `docs/SEAMS.md` connection-pool note, `docs/PERF_KNOBS.md`). Two enablers,
-both needed for big-AOI loads to feel good:
+(see `docs/SEAMS.md` connection-pool note, `docs/PERF_KNOBS.md`). The main
+enabler for big-AOI loads:
 
-- **Overview mode is the unlock.** Once overview mode is seam-fixed, loading
-  100+ items as one-decode-each BitmapLayers is cheap (≈ tens of MB), versus
-  the streaming MultiCOGLayer storm. So: big AOI → overview by default, stream
-  on zoom-in. This is why the seam fix is the prerequisite for the loader.
 - **Viewport-driven STAC fetch.** Stop enumerating the whole bbox up front;
   query items near the view on `moveend` (debounced) and diff the source list.
-  Long-standing TODO (noted in CLAUDE.md). Pairs with an auto zoom-gate that
-  flips overview ↔ streaming.
+  Long-standing TODO (noted in CLAUDE.md). The COGLayer/MosaicLayer path already
+  only streams tiles for visible items, so this caps how many sources are open
+  at once.
 
 ### Suggested build order
 
-1. Fix overview seams (precise bounds).
-2. Auto zoom-gate: overview at low zoom, streaming at high zoom.
-3. Geocoder text box + toggleable marker.
-4. LLM front-end for fuzzy queries (optional, last).
-5. Viewport-driven STAC fetch for true large-area roaming.
+1. Geocoder text box + toggleable marker.
+2. LLM front-end for fuzzy queries (optional, last).
+3. Viewport-driven STAC fetch for true large-area roaming.
