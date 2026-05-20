@@ -23,6 +23,8 @@ import {
   buildRenderPipeline,
   COMPOSITE,
   DEFAULT_NDVI_COLORMAP,
+  DEFAULT_NDVI_RANGE,
+  DEFAULT_NDVI_SCALE,
   DEFAULT_RGB_RESCALE_MAX,
   NDVI_COLORMAPS,
   SOURCE_BANDS,
@@ -35,8 +37,8 @@ import {
 // (filtered out by stac.ts CORS_OK_HOSTS).
 const AVAILABLE_YEARS = [2022, 2023, 2024] as const;
 const DEFAULT_YEAR = 2023;
-// Netherlands — wide area
-const STAC_BBOX: [number, number, number, number] = [1.5, 49.5, 8.5, 54.5];
+// London + southern UK
+const STAC_BBOX: [number, number, number, number] = [-6.0, 49.5, 2.0, 53.0];
 
 function yearToDatetime(year: number): string {
   return `${year}-01-01T00:00:00Z/${year}-12-31T23:59:59Z`;
@@ -79,6 +81,8 @@ export default function App() {
   const [year, setYear] = useState<number>(DEFAULT_YEAR);
   const [rgbRescaleMax, setRgbRescaleMax] = useState<number>(DEFAULT_RGB_RESCALE_MAX);
   const [ndviColormap, setNdviColormap] = useState<NdviColormap>(DEFAULT_NDVI_COLORMAP);
+  const [ndviRange, setNdviRange] = useState<[number, number]>(DEFAULT_NDVI_RANGE);
+  const [ndviScale, setNdviScale] = useState<number>(DEFAULT_NDVI_SCALE);
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapTexture, setColormapTexture] = useState<Texture | null>(null);
   const stats: LoadStats = { loaded: 0, failed: 0, failures: [] };
@@ -130,6 +134,8 @@ export default function App() {
     const pipeline = buildRenderPipeline(mode, colormapTexture, {
       rgbRescaleMax,
       ndviColormap,
+      ndviRange,
+      ndviScale,
     });
 
     const mosaic = new MosaicLayer<PartialSTACItem, null>({
@@ -156,12 +162,17 @@ export default function App() {
           composite,
           renderPipeline: pipeline,
           epsgResolver,
+          // See docs/PERF_KNOBS.md for the full menu + drawbacks. Shipping
+          // just these two: refinement gives instant-feeling zoom-in;
+          // maxRequests=16 saturates HTTP/2 to CloudFront.
+          refinementStrategy: "best-available",
+          maxRequests: 16,
           // Inner RasterTileLayer caches each tile's renderPipeline result
           // (raster-tile-layer.ts:338 wires renderTile → renderSubLayers).
           // Without this, brightness/colormap prop changes never reach
           // already-rendered tiles.
           updateTriggers: {
-            renderTile: [mode, rgbRescaleMax, ndviColormap, colormapTexture],
+            renderTile: [mode, rgbRescaleMax, ndviColormap, ndviRange[0], ndviRange[1], ndviScale, colormapTexture],
           },
         } as any);
       },
@@ -169,11 +180,11 @@ export default function App() {
       beforeId: labelBeforeId,
     });
     return [mosaic];
-  }, [stacItems, labelBeforeId, mode, colormapTexture, rgbRescaleMax, ndviColormap]);
+  }, [stacItems, labelBeforeId, mode, colormapTexture, rgbRescaleMax, ndviColormap, ndviRange, ndviScale]);
 
   const initialViewState = {
-    longitude: 5.3,
-    latitude: 52.1,
+    longitude: -0.1,
+    latitude: 51.5,
     zoom: 6.5,
     pitch: 0,
     bearing: 0,
@@ -185,6 +196,8 @@ export default function App() {
         ref={mapRef}
         initialViewState={initialViewState}
         minZoom={3}
+        // attributionControl={false}  // comment out to re-enable the (i) badge bottom-right
+        attributionControl={false}
         mapStyle="https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json"
         onLoad={(e) => {
           const map = e.target;
@@ -208,6 +221,10 @@ export default function App() {
         onRgbRescaleMaxChange={setRgbRescaleMax}
         ndviColormap={ndviColormap}
         onNdviColormapChange={setNdviColormap}
+        ndviRange={ndviRange}
+        onNdviRangeChange={setNdviRange}
+        ndviScale={ndviScale}
+        onNdviScaleChange={setNdviScale}
       />
     </div>
   );
@@ -226,6 +243,10 @@ function InfoPanel({
   onRgbRescaleMaxChange,
   ndviColormap,
   onNdviColormapChange,
+  ndviRange,
+  onNdviRangeChange,
+  ndviScale,
+  onNdviScaleChange,
 }: {
   sourceCount: number;
   year: number | null;
@@ -239,12 +260,45 @@ function InfoPanel({
   onRgbRescaleMaxChange: (v: number) => void;
   ndviColormap: NdviColormap;
   onNdviColormapChange: (c: NdviColormap) => void;
+  ndviRange: [number, number];
+  onNdviRangeChange: (r: [number, number]) => void;
+  ndviScale: number;
+  onNdviScaleChange: (s: number) => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
   const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
   const copyFailures = () => {
     const text = stats.failures.map((f) => `${f.url}\n  ${f.err}`).join("\n\n");
     navigator.clipboard?.writeText(text).catch(() => {});
   };
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={() => setCollapsed(false)}
+        aria-label="expand panel"
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          position: "absolute",
+          top: 12,
+          left: 12,
+          width: 28,
+          height: 28,
+          padding: 0,
+          background: "rgba(0,0,0,0.55)",
+          color: "white",
+          border: "1px solid rgba(255,255,255,0.2)",
+          borderRadius: 4,
+          cursor: "pointer",
+          fontSize: 14,
+          lineHeight: "26px",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+        }}
+      >
+        ▸
+      </button>
+    );
+  }
   return (
     <div
       onMouseDown={(e) => e.stopPropagation()}
@@ -266,6 +320,23 @@ function InfoPanel({
       }}
     >
       <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 8 }}>
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-label={collapsed ? "expand" : "collapse"}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "white",
+            cursor: "pointer",
+            padding: 0,
+            fontSize: 12,
+            opacity: 0.7,
+            width: 14,
+          }}
+        >
+          {collapsed ? "▸" : "▾"}
+        </button>
         Sentinel-2 Temporal Mosaic
         <select
           value={year ?? ""}
@@ -288,6 +359,7 @@ function InfoPanel({
           ))}
         </select>
       </div>
+
       <div style={{ opacity: 0.65, fontSize: 11, marginTop: 4 }}>
         {error
           ? `STAC error: ${error}`
@@ -318,6 +390,53 @@ function InfoPanel({
           </button>
         ))}
       </div>
+      {mode === "ndvi" && (
+        <div style={{ marginTop: 8, fontSize: 11 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", opacity: 0.8 }}>
+            <span>NDVI range</span>
+            <span style={{ opacity: 0.6 }}>
+              {ndviRange[0].toFixed(2)} → {ndviRange[1].toFixed(2)}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={-1}
+            max={1}
+            step={0.05}
+            value={ndviRange[0]}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              onNdviRangeChange([Math.min(v, ndviRange[1] - 0.05), ndviRange[1]]);
+            }}
+            style={{ width: "100%", marginTop: 2 }}
+          />
+          <input
+            type="range"
+            min={-1}
+            max={1}
+            step={0.05}
+            value={ndviRange[1]}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              onNdviRangeChange([ndviRange[0], Math.max(v, ndviRange[0] + 0.05)]);
+            }}
+            style={{ width: "100%" }}
+          />
+          <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", opacity: 0.8 }}>
+            <span>darken</span>
+            <span style={{ opacity: 0.6 }}>×{ndviScale.toFixed(2)}</span>
+          </div>
+          <input
+            type="range"
+            min={0.2}
+            max={1.5}
+            step={0.05}
+            value={ndviScale}
+            onChange={(e) => onNdviScaleChange(Number(e.target.value))}
+            style={{ width: "100%" }}
+          />
+        </div>
+      )}
       {mode === "ndvi" && (
         <div style={{ marginTop: 8, display: "flex", gap: 4 }}>
           {NDVI_COLORMAPS.map((c) => (

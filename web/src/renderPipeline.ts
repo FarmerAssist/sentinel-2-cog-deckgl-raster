@@ -7,6 +7,7 @@ import {
 import type { Texture } from "@luma.gl/core";
 import { discardBoundlessPadding } from "./discardBlack";
 import { NdviFromRG } from "./shaders/ndvi";
+import { ScaleColor } from "./shaders/scaleColor";
 
 export type RenderMode = "rgb" | "ndvi";
 
@@ -16,6 +17,12 @@ export const DEFAULT_RGB_RESCALE_MAX = 0.05;
 export const NDVI_COLORMAPS = ["cividis", "viridis", "plasma"] as const;
 export type NdviColormap = (typeof NDVI_COLORMAPS)[number];
 export const DEFAULT_NDVI_COLORMAP: NdviColormap = "cividis";
+
+/** Default NDVI stretch range — full [-1, 1] maps across the whole colormap. */
+export const DEFAULT_NDVI_RANGE: [number, number] = [-1, 1];
+
+/** Default post-colormap multiplier for NDVI; 1.0 = unchanged, <1 darkens. */
+export const DEFAULT_NDVI_SCALE = 1.0;
 
 /**
  * Source slot mapping fed to MultiCOGLayer for each mode.
@@ -35,7 +42,12 @@ export const COMPOSITE: Record<RenderMode, { r: string; g?: string; b?: string }
 export function buildRenderPipeline(
   mode: RenderMode,
   colormapTexture: Texture | null,
-  opts: { rgbRescaleMax?: number; ndviColormap?: NdviColormap } = {},
+  opts: {
+    rgbRescaleMax?: number;
+    ndviColormap?: NdviColormap;
+    ndviRange?: [number, number];
+    ndviScale?: number;
+  } = {},
 ): RasterModule[] {
   if (mode === "rgb") {
     // MultiCOGLayer uploads uint16 bands as r16unorm → sampler returns
@@ -54,10 +66,11 @@ export function buildRenderPipeline(
   }
   // NDVI
   if (!colormapTexture) return [];
+  const [ndviMin, ndviMax] = opts.ndviRange ?? DEFAULT_NDVI_RANGE;
   return [
     { module: discardBoundlessPadding },
     { module: NdviFromRG },
-    { module: LinearRescale, props: { rescaleMin: -1, rescaleMax: 1 } },
+    { module: LinearRescale, props: { rescaleMin: ndviMin, rescaleMax: ndviMax } },
     {
       module: Colormap,
       props: {
@@ -65,6 +78,10 @@ export function buildRenderPipeline(
         colormapIndex: COLORMAP_INDEX[opts.ndviColormap ?? DEFAULT_NDVI_COLORMAP],
         reversed: false,
       },
+    },
+    {
+      module: ScaleColor,
+      props: { factor: opts.ndviScale ?? DEFAULT_NDVI_SCALE },
     },
   ];
 }
