@@ -10,7 +10,7 @@ import { NormalizedDifference } from "./shaders/ndvi";
 import { ScaleColor } from "./shaders/scaleColor";
 
 /** Sentinel-2 band assets we pull per item (RGB uses the precomposed TCI). */
-export type BandKey = "B03" | "B04" | "B08" | "B11";
+export type BandKey = "B03" | "B04" | "B08";
 
 /**
  * Curated spectral-index registry (item 4). Every entry is a normalized
@@ -18,14 +18,15 @@ export type BandKey = "B03" | "B04" | "B08" | "B11";
  * and the existing MultiCOGLayer composite path — only the two band slots differ.
  * `a` is packed into color.r, `b` into color.g by the `composite` below.
  *
- * Adding a non-normalized-difference index (EVI, SAVI, BSI) means a dedicated
- * shader + constants; see docs/SPECTRAL_INDICES.md for the generic-formula path.
+ * Only 10 m bands here (B03/B04/B08). NDBI/NDMI were dropped (2026-05-20): they
+ * pair B11 (20 m SWIR) with a 10 m band, and the resolution/nodata-footprint
+ * mismatch paints hard ±1 seams where one grid has data and the other pads with
+ * zeros. See docs/SPECTRAL_INDICES.md. A non-normalized-difference index (EVI,
+ * SAVI, BSI) would also need a dedicated shader + constants.
  */
 export const INDICES = {
   ndvi: { label: "NDVI", a: "B08", b: "B04", desc: "vegetation" },
   ndwi: { label: "NDWI", a: "B03", b: "B08", desc: "water" },
-  ndbi: { label: "NDBI", a: "B11", b: "B08", desc: "built-up" },
-  ndmi: { label: "NDMI", a: "B08", b: "B11", desc: "moisture" },
 } as const satisfies Record<string, { label: string; a: BandKey; b: BandKey; desc: string }>;
 
 export type IndexKey = keyof typeof INDICES;

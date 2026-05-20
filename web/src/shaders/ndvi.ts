@@ -2,8 +2,8 @@ import type { ShaderModule } from "@luma.gl/shadertools";
 
 /**
  * Generic normalized difference `(a - b) / (a + b)` from an a-in-r / b-in-g
- * packed color. Drives every curated index (NDVI, NDWI, NDBI, NDMI) — only the
- * band → slot mapping differs per index (see `INDICES` in renderPipeline.ts).
+ * packed color. Drives every curated index (NDVI, NDWI) — only the band → slot
+ * mapping differs per index (see `INDICES` in renderPipeline.ts).
  *
  * Runs after MultiCOGLayer's auto-prepended CompositeBands module, which has
  * written `composite.r` (band a) into `color.r` and `composite.g` (band b) into

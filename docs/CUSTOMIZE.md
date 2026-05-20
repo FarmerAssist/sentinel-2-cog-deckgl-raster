@@ -34,17 +34,24 @@ it opens COGs (see `docs/PERF_KNOBS.md`).
 ## Add a spectral index
 
 The curated indices are all normalized differences `(a − b) / (a + b)`, so they
-share one shader. To add one (e.g. **NDSI**, snow, = (B03 − B11)/(B03 + B11)):
+share one shader. To add one (e.g. **GNDVI** = (B08 − B03)/(B08 + B03)):
 
 1. Add a row to `INDICES` (`src/renderPipeline.ts`):
    ```ts
-   ndsi: { label: "NDSI", a: "B03", b: "B11", desc: "snow" },
+   gndvi: { label: "GNDVI", a: "B08", b: "B03", desc: "chlorophyll" },
    ```
    `a` packs into `color.r`, `b` into `color.g`; the shader does the ratio.
 2. Make sure both bands are in `REQUIRED_BANDS` (`src/stac.ts`). Bands not
    listed there aren't fetched, and items missing a required band are skipped.
 
 That's it — the dropdown, sliders, colormap, and reverse all pick it up.
+
+> ⚠️ **Stick to same-resolution bands.** Earth Genome publishes each band at its
+> native resolution: **B02/B03/B04/B08 are 10 m, B05–B07/B8A/B11/B12 are 20 m,
+> B01/B09 are 60 m.** A normalized-difference index that mixes resolutions (e.g.
+> NDBI/NDMI, which use 20 m **B11** with a 10 m band) paints hard ±1 seams where
+> the two grids' nodata footprints disagree — this is exactly why NDBI/NDMI were
+> removed. Pair bands of equal resolution, or resample to a common grid first.
 
 **Non-normalized-difference indices** (EVI, SAVI, BSI — need constants or >2
 bands) need a dedicated shader: clone `src/shaders/ndvi.ts`, write the GLSL, and

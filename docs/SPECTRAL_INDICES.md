@@ -10,8 +10,17 @@ the existing `MultiCOGLayer` composite path. Adding one is a one-line entry in
 |-------|------------------------|--------------|--------------|
 | NDVI  | (NIR − Red)/(NIR + Red)| B08, B04     | vegetation   |
 | NDWI  | (Green − NIR)/(…)      | B03, B08     | open water   |
-| NDBI  | (SWIR − NIR)/(…)       | B11, B08     | built-up     |
-| NDMI  | (NIR − SWIR)/(…)       | B08, B11     | canopy moisture |
+
+> **Why no NDBI/NDMI (dropped 2026-05-20).** Both pair **B11 (20 m SWIR)** with a
+> 10 m band. Earth Genome publishes each band at its *native* resolution, so the
+> 20 m and 10 m COGs have different pixel grids and nodata footprints (the
+> dataset is a median of SCL-masked pixels, so nodata = "no clear pixel all
+> year", which resamples differently per resolution). Wherever one band has data
+> and the other is zero-padding, `(a − b)/(a + b)` snaps to a constant **+1**
+> (bright) or **−1** (dark) and paints hard seams — a thick band/strip across the
+> scene. NDVI and NDWI are clean because all their bands are 10 m. To bring SWIR
+> indices back you'd need to resample/snap B11 to the 10 m grid first (or accept
+> the `discardBoundlessPadding`-on-either-band gaps along those edges).
 
 How it works:
 - `INDICES[k]` declares `{ a, b }` band slots. `bandSlotsFor` maps them to STAC
@@ -24,8 +33,8 @@ How it works:
   present in the bundled `colormaps.png` sprite — no sprite regen needed. A
   symmetric `[-1, 1]` rescale centers a divergent ramp at 0 ("auto-weight").
 
-Required bands are gated in `stac.ts` (`REQUIRED_BANDS = B03,B04,B08,B11`);
-items missing any are skipped so every listed index always renders.
+Required bands are gated in `stac.ts` (`REQUIRED_BANDS = B03,B04,B08` — all
+10 m); items missing any are skipped so every listed index always renders.
 
 ### Adding a non-normalized-difference index (EVI, SAVI, BSI)
 

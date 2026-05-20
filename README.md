@@ -40,7 +40,8 @@ Two kinds of render selectable from the in-app panel:
   composite — that earlier path produced tile seams; see `docs/SEAMS.md`.
 - **Spectral indices** — normalized-difference indices computed in a shader
   over two bands via `MultiCOGLayer`, rescaled, and sampled through a colormap:
-  NDVI (B08/B04), NDWI (B03/B08), NDBI (B11/B08), NDMI (B08/B11). Colormaps
+  NDVI (B08/B04) and NDWI (B03/B08) — both all-10 m bands. (NDBI/NDMI were
+  dropped: pairing 20 m B11 with a 10 m band seamed.) Colormaps
   include sequential (cividis/viridis/plasma) and divergent (rdylgn/rdbu/
   spectral) ramps; a symmetric range centers divergent ramps at 0. See
   `docs/SPECTRAL_INDICES.md` for the registry and the catalog roadmap.
@@ -165,7 +166,7 @@ Items are `MGRSTILE_YYYY-MM-DD_YYYY-MM-DD` (e.g. `31UFT_2024-04-01_2024-08-01`).
 Each item has assets `B01..B12`, `B8A` (single-band uint16 reflectance per
 Sentinel-2 band) plus `TCI` (3-band uint8 RGB visualization composite).
 RGB renders the **TCI** `visual` asset directly (one COGLayer per item);
-indices pull **B03/B04/B08/B11** through MultiCOGLayer. `stac.ts` requires
+indices pull **B03/B04/B08** (all 10 m) through MultiCOGLayer. `stac.ts` requires
 all four index bands plus a TCI href, skipping items missing any.
 
 - CRS: EPSG:3857 (all bands; verified via `gdalinfo /vsicurl/...`).
