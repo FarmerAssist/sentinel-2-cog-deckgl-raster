@@ -1,4 +1,4 @@
-# sentinel-2-cog-deckgl-raster
+# Sentinel-2 Sandbox with deck.gl-raster
 
 ![NDVI over the Salton Sea and Imperial Valley, rendered browser-side from Sentinel-2 COGs with an Emrld colormap](./docs/hero.webp)
 
