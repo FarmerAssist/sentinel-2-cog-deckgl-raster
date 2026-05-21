@@ -21,6 +21,8 @@ export type ColorPrefs = {
   ndviRange: [number, number];
   ndviScale: number;
   ndviReversed: boolean;
+  // RGB texture smoothing: true = linear magnification, false = nearest.
+  smoothing: boolean;
 };
 
 export const DEFAULT_COLOR_PREFS: ColorPrefs = {
@@ -29,6 +31,7 @@ export const DEFAULT_COLOR_PREFS: ColorPrefs = {
   ndviRange: DEFAULT_NDVI_RANGE,
   ndviScale: DEFAULT_NDVI_SCALE,
   ndviReversed: false,
+  smoothing: false,
 };
 
 const num = (v: unknown, fallback: number) =>
@@ -56,6 +59,7 @@ export function loadColorPrefs(): ColorPrefs {
       ndviRange: [num(r[0], DEFAULT_NDVI_RANGE[0]), num(r[1], DEFAULT_NDVI_RANGE[1])],
       ndviScale: num(p.ndviScale, DEFAULT_NDVI_SCALE),
       ndviReversed: p.ndviReversed === true,
+      smoothing: p.smoothing === true,
     };
   } catch {
     return DEFAULT_COLOR_PREFS;

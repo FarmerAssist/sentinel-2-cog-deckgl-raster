@@ -162,14 +162,19 @@ export default function App() {
   const [showMarker, setShowMarker] = useState(true);
   const [drawing, setDrawing] = useState(false);
   const [stats, setStats] = useState<LoadStats>({ loaded: 0, failed: 0, failures: [] });
+  // Live map zoom, mirrored for the on-panel readout (diagnostic).
+  const [zoom, setZoom] = useState<number>(9);
+  // RGB texture magnification: false = nearest (blocky, honest 10 m pixels),
+  // true = linear (smooth interpolation past native zoom). Experiment toggle.
+  const [smoothing, setSmoothing] = useState<boolean>(initialPrefs.smoothing);
 
   // Mirror the module-level load scoreboard into React state.
   useEffect(() => subscribeStats(setStats), []);
 
   // Persist color/look prefs whenever they change, so they survive a reload.
   useEffect(() => {
-    saveColorPrefs({ rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed });
-  }, [rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed]);
+    saveColorPrefs({ rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed, smoothing });
+  }, [rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed, smoothing]);
 
   // Keyboard shortcuts (core set). Letter keys are ignored while typing in an
   // input/select; Esc works everywhere (also blurs/clears via the field's own
@@ -339,10 +344,14 @@ export default function App() {
         },
         renderSource: (source, { data }) =>
           new COGLayer<S2TileData>({
-            id: `s2-cog-rgb-${gen}-${source.id}`,
+            // Smoothing is baked into each tile's texture sampler, so the id
+            // includes it — toggling forces deck to rebuild tiles with the new
+            // filter rather than reusing the cached (wrong-sampler) textures.
+            id: `s2-cog-rgb-${gen}-${smoothing ? "lin" : "near"}-${source.id}`,
             geotiff: data,
             epsgResolver,
-            getTileData,
+            getTileData: (image: any, opts: any) =>
+              getTileData(image, opts, smoothing ? "linear" : "nearest"),
             renderTile: (tileData: S2TileData) => renderTile(tileData, rgbGain),
             signal: genSignal,
             refinementStrategy: "best-available",
@@ -416,7 +425,7 @@ export default function App() {
       beforeId: labelBeforeId,
     });
     return [mosaic];
-  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, colormapIndexMap, rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed]);
+  }, [stacItems, labelBeforeId, mode, gen, colormapTexture, colormapIndexMap, rgbGain, smoothing, ndviColormap, ndviRange, ndviScale, ndviReversed]);
 
   const initialViewState = {
     longitude: -114.6,
@@ -432,6 +441,7 @@ export default function App() {
         ref={mapRef}
         initialViewState={initialViewState}
         minZoom={3}
+        onMove={(e) => setZoom(e.viewState.zoom)}
         // attributionControl={false}  // comment out to re-enable the (i) badge bottom-right
         attributionControl={false}
         mapStyle={mapStyle}
@@ -503,6 +513,9 @@ export default function App() {
         drawing={drawing}
         onToggleDraw={() => setDrawing((v) => !v)}
         onResetNorth={handleResetNorth}
+        zoom={zoom}
+        smoothing={smoothing}
+        onSmoothingChange={setSmoothing}
       />
     </div>
   );
@@ -676,6 +689,9 @@ function InfoPanel({
   drawing,
   onToggleDraw,
   onResetNorth,
+  zoom,
+  smoothing,
+  onSmoothingChange,
 }: {
   sourceCount: number;
   year: number | null;
@@ -705,6 +721,9 @@ function InfoPanel({
   drawing: boolean;
   onToggleDraw: () => void;
   onResetNorth: () => void;
+  zoom: number;
+  smoothing: boolean;
+  onSmoothingChange: (v: boolean) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
@@ -825,6 +844,16 @@ function InfoPanel({
               ? "loading STAC items…"
               : `${sourceCount} sources · ${stats.loaded} loaded · ${stats.failed} failed · ${pending} pending`}
         </div>
+        <div
+          style={{
+            fontFamily: UI.mono,
+            fontSize: 11.5,
+            color: UI.accent,
+            marginTop: 4,
+          }}
+        >
+          zoom {zoom.toFixed(2)} · dpr {window.devicePixelRatio}
+        </div>
         <div style={{ marginTop: 9, display: "flex", flexWrap: "wrap", gap: 6 }}>
           <Toggle
             active={drawing}
@@ -917,6 +946,18 @@ function InfoPanel({
               >
                 <span>darker</span>
                 <span>brighter</span>
+              </div>
+              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
+                <Toggle
+                  active={smoothing}
+                  onClick={() => onSmoothingChange(!smoothing)}
+                  title="Linear texture filtering: smooths magnified pixels past native 10 m zoom (interpolation, not added detail)"
+                >
+                  SMOOTH {smoothing ? "ON" : "OFF"}
+                </Toggle>
+                <span style={{ fontFamily: UI.mono, fontSize: 10.5, color: UI.faint }}>
+                  for high zoom
+                </span>
               </div>
             </>
           )}

@@ -41,6 +41,10 @@ export type S2TileData = {
 export async function getTileData(
   image: GeoTIFF | Overview,
   options: GetTileDataOptions,
+  // Texture magnification filter. "nearest" = honest 10 m blocks past native
+  // zoom; "linear" = smooth (interpolated, no added detail). Toggleable from
+  // the panel so the two can be compared at the same zoom.
+  filter: "nearest" | "linear" = "nearest",
 ): Promise<S2TileData> {
   const { device, x, y, signal } = options;
   const tile = await fetchTileWithRetry(image, x, y, signal);
@@ -70,8 +74,8 @@ export async function getTileData(
     width,
     height,
     sampler: {
-      minFilter: "nearest",
-      magFilter: "nearest",
+      minFilter: filter,
+      magFilter: filter,
       addressModeU: "clamp-to-edge",
       addressModeV: "clamp-to-edge",
     },
