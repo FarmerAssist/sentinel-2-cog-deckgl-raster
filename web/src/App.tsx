@@ -283,6 +283,11 @@ export default function App() {
     setDrawing(false);
   };
 
+  // Snap the map back to plan view: bearing → north, pitch → flat.
+  const handleResetNorth = () => {
+    mapRef.current?.getMap()?.easeTo({ bearing: 0, pitch: 0, duration: 400 });
+  };
+
   const handlePickPlace = (r: GeoResult) => {
     const bb = resultToBbox(r);
     setBbox(bb);
@@ -488,6 +493,7 @@ export default function App() {
         onToggleMarker={() => setShowMarker((v) => !v)}
         drawing={drawing}
         onToggleDraw={() => setDrawing((v) => !v)}
+        onResetNorth={handleResetNorth}
       />
     </div>
   );
@@ -660,6 +666,7 @@ function InfoPanel({
   onToggleMarker,
   drawing,
   onToggleDraw,
+  onResetNorth,
 }: {
   sourceCount: number;
   year: number | null;
@@ -688,6 +695,7 @@ function InfoPanel({
   onToggleMarker: () => void;
   drawing: boolean;
   onToggleDraw: () => void;
+  onResetNorth: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const pending = Math.max(0, sourceCount - stats.loaded - stats.failed);
@@ -818,6 +826,13 @@ function InfoPanel({
           </Toggle>
           <Toggle active={labels} onClick={() => onLabelsChange(!labels)}>
             LABELS {labels ? "ON" : "OFF"}
+          </Toggle>
+          <Toggle
+            active={false}
+            onClick={onResetNorth}
+            title="Reset map to north-up, flat (bearing 0, pitch 0)"
+          >
+            NORTH ↑
           </Toggle>
           {hasMarker && (
             <Toggle active={showMarker} onClick={onToggleMarker}>
