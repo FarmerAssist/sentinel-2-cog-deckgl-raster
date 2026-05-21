@@ -31,6 +31,7 @@ import {
   type StatsSnapshot,
 } from "./loadStats";
 import { resultToBbox, type GeoResult } from "./geocode";
+import { loadColorPrefs, saveColorPrefs } from "./prefs";
 import {
   appendCartoColormaps,
   buildColormapStripe,
@@ -142,11 +143,14 @@ export default function App() {
   const [stacError, setStacError] = useState<string | null>(null);
   const [mode, setMode] = useState<RenderMode>("rgb");
   const [year, setYear] = useState<number>(DEFAULT_YEAR);
-  const [rgbGain, setRgbGain] = useState<number>(DEFAULT_RGB_GAIN);
-  const [ndviColormap, setNdviColormap] = useState<NdviColormap>(DEFAULT_NDVI_COLORMAP);
-  const [ndviRange, setNdviRange] = useState<[number, number]>(DEFAULT_NDVI_RANGE);
-  const [ndviScale, setNdviScale] = useState<number>(DEFAULT_NDVI_SCALE);
-  const [ndviReversed, setNdviReversed] = useState<boolean>(false);
+  // Color/look prefs are seeded from localStorage so a reload keeps the user's
+  // choices until they change them (persisted by the effect below).
+  const initialPrefs = useRef(loadColorPrefs()).current;
+  const [rgbGain, setRgbGain] = useState<number>(initialPrefs.rgbGain);
+  const [ndviColormap, setNdviColormap] = useState<NdviColormap>(initialPrefs.ndviColormap);
+  const [ndviRange, setNdviRange] = useState<[number, number]>(initialPrefs.ndviRange);
+  const [ndviScale, setNdviScale] = useState<number>(initialPrefs.ndviScale);
+  const [ndviReversed, setNdviReversed] = useState<boolean>(initialPrefs.ndviReversed);
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapTexture, setColormapTexture] = useState<Texture | null>(null);
   // name → row index in the CARTO-augmented colormap texture. Populated once the
@@ -161,6 +165,11 @@ export default function App() {
 
   // Mirror the module-level load scoreboard into React state.
   useEffect(() => subscribeStats(setStats), []);
+
+  // Persist color/look prefs whenever they change, so they survive a reload.
+  useEffect(() => {
+    saveColorPrefs({ rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed });
+  }, [rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed]);
 
   // Keyboard shortcuts (core set). Letter keys are ignored while typing in an
   // input/select; Esc works everywhere (also blurs/clears via the field's own
