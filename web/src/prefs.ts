@@ -23,6 +23,8 @@ export type ColorPrefs = {
   ndviReversed: boolean;
   // RGB texture smoothing: true = linear magnification, false = nearest.
   smoothing: boolean;
+  // Selected mosaic year. App validates against AVAILABLE_YEARS on load.
+  year: number;
 };
 
 export const DEFAULT_COLOR_PREFS: ColorPrefs = {
@@ -32,6 +34,7 @@ export const DEFAULT_COLOR_PREFS: ColorPrefs = {
   ndviScale: DEFAULT_NDVI_SCALE,
   ndviReversed: false,
   smoothing: false,
+  year: 2023,
 };
 
 const num = (v: unknown, fallback: number) =>
@@ -60,6 +63,7 @@ export function loadColorPrefs(): ColorPrefs {
       ndviScale: num(p.ndviScale, DEFAULT_NDVI_SCALE),
       ndviReversed: p.ndviReversed === true,
       smoothing: p.smoothing === true,
+      year: num(p.year, 2023),
     };
   } catch {
     return DEFAULT_COLOR_PREFS;

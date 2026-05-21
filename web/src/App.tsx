@@ -145,10 +145,14 @@ export default function App() {
   const [stacItems, setStacItems] = useState<PartialSTACItem[]>([]);
   const [stacError, setStacError] = useState<string | null>(null);
   const [mode, setMode] = useState<RenderMode>("rgb");
-  const [year, setYear] = useState<number>(DEFAULT_YEAR);
-  // Color/look prefs are seeded from localStorage so a reload keeps the user's
-  // choices until they change them (persisted by the effect below).
+  // Look/selection prefs are seeded from localStorage so a reload keeps the
+  // user's choices until they change them (persisted by the effect below).
   const initialPrefs = useRef(loadColorPrefs()).current;
+  const [year, setYear] = useState<number>(
+    (AVAILABLE_YEARS as readonly number[]).includes(initialPrefs.year)
+      ? initialPrefs.year
+      : DEFAULT_YEAR,
+  );
   const [rgbGain, setRgbGain] = useState<number>(initialPrefs.rgbGain);
   const [ndviColormap, setNdviColormap] = useState<NdviColormap>(initialPrefs.ndviColormap);
   const [ndviRange, setNdviRange] = useState<[number, number]>(initialPrefs.ndviRange);
@@ -176,8 +180,8 @@ export default function App() {
 
   // Persist color/look prefs whenever they change, so they survive a reload.
   useEffect(() => {
-    saveColorPrefs({ rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed, smoothing });
-  }, [rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed, smoothing]);
+    saveColorPrefs({ rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed, smoothing, year });
+  }, [rgbGain, ndviColormap, ndviRange, ndviScale, ndviReversed, smoothing, year]);
 
   // Keyboard shortcuts (core set). Letter keys are ignored while typing in an
   // input/select; Esc works everywhere (also blurs/clears via the field's own
