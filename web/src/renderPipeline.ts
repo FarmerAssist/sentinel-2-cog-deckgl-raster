@@ -56,6 +56,10 @@ export const INDEX_COLORMAPS = [
   "earth",
   "geyser",
   "sunset",
+  "sunsetdark",
+  "teal",
+  "blues",
+  "oranges",
 ] as const;
 export type IndexColormap = (typeof INDEX_COLORMAPS)[number];
 export const DEFAULT_NDVI_COLORMAP: IndexColormap = "cividis";

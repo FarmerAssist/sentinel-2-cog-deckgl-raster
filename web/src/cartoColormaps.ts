@@ -20,6 +20,10 @@ export const CARTO_PALETTES = {
   // Sequential multi-hue yellow → orange → pink → purple. Colorblind-safe
   // rainbow stand-in for the removed `spectral` (no green/red opposition).
   sunset: ["#f3e79b", "#fac484", "#f8a07e", "#eb7f86", "#ce6693", "#a059a0", "#5c53a5"],
+  // Deeper sibling of sunset: yellow → red → magenta → purple.
+  sunsetdark: ["#fcde9c", "#faa476", "#f0746e", "#e34f6f", "#dc3977", "#b9257a", "#7c1d6f"],
+  // Sequential pale → deep blue-green. Natural read for NDWI/water.
+  teal: ["#d1eeea", "#a8dbd9", "#85c4c9", "#68abb8", "#4f90a6", "#3b738f", "#2a5674"],
 } as const;
 
 export type CartoColormap = keyof typeof CARTO_PALETTES;
