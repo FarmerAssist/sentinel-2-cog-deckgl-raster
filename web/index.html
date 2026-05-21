@@ -11,8 +11,18 @@
       rel="stylesheet"
     />
     <style>
-      body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      #root { width: 100vw; height: 100vh; }
+      /* Single fixed-viewport app: never let the page itself scroll, and keep
+         the background dark so no white shows if a child reaches the edge. */
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        overscroll-behavior: none;
+        background: #0a0d12;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      /* 100dvh tracks the real visible height (mobile URL bars etc.). */
+      #root { width: 100vw; height: 100vh; height: 100dvh; }
     </style>
   </head>
   <body>
