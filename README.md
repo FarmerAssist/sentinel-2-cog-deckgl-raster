@@ -133,12 +133,12 @@ own examples — each demonstrates a different asset shape:
     NDVI live-filter shape (what `RGB` mode here is built on).
   - **vermont** — the same NDVI math over a single scene.
   - **sentinel-2** — multi-band composite presets (true/false-color band combos).
-- **deck.gl-geotiff examples** —
-  [github.com/developmentseed/deck.gl-geotiff](https://github.com/developmentseed/deck.gl-geotiff)
+- **deck.gl-geotiff** —
+  [packages/deck.gl-geotiff](https://github.com/developmentseed/deck.gl-raster/tree/main/packages/deck.gl-geotiff)
   → `MosaicLayer` / `COGLayer` / `MultiCOGLayer` usage, the layer tier this app
-  sits on.
+  sits on. (Lives in the deck.gl-raster monorepo.)
 - **@developmentseed/geotiff** —
-  [github.com/developmentseed/geotiff](https://github.com/developmentseed/geotiff)
+  [packages/geotiff](https://github.com/developmentseed/deck.gl-raster/tree/main/packages/geotiff)
   → the COG reader itself, if you need to debug byte-range/decode behavior.
 
 Match your dataset to the closest example's **asset layout** (single precomposed
@@ -196,18 +196,22 @@ RGB channels before the user pipeline runs.
 
 ## Stack
 
-- [`@developmentseed/deck.gl-geotiff`](https://github.com/developmentseed/deck.gl-geotiff)
+- [`@developmentseed/deck.gl-geotiff`](https://github.com/developmentseed/deck.gl-raster/tree/main/packages/deck.gl-geotiff)
   — `MosaicLayer` + `MultiCOGLayer`.
 - [`@developmentseed/deck.gl-raster`](https://github.com/developmentseed/deck.gl-raster)
   — shader-pipeline building blocks (`CompositeBands`, `LinearRescale`,
     `Colormap`, the shipped `colormaps.png` sprite).
-- [`@developmentseed/geotiff`](https://github.com/developmentseed/geotiff)
+- [`@developmentseed/geotiff`](https://github.com/developmentseed/deck.gl-raster/tree/main/packages/geotiff)
   — COG reader and decode worker pool.
-- [`@developmentseed/proj`](https://github.com/developmentseed/proj)
+- [`@developmentseed/proj`](https://github.com/developmentseed/deck.gl-raster/tree/main/packages/proj)
   — EPSG resolver (collection is EPSG:3857 already, but the layers
     want one).
-- [`@chunkd/source-http`](https://github.com/linz/chunkd) — HTTP Range
+- [`@chunkd/source-http`](https://github.com/blacha/chunkd) — HTTP Range
   source under the hood.
+
+> The four `@developmentseed/*` packages above all live in the one
+> [`deck.gl-raster` monorepo](https://github.com/developmentseed/deck.gl-raster)
+> (under `packages/`), not separate repos.
 - deck.gl 9.3 + luma.gl 9.3 + maplibre-gl 5 + react-map-gl 8 + React 19.
 
 **Please check the latest from those Dev Seed repos before you start
