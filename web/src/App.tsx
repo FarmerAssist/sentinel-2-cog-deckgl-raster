@@ -592,8 +592,8 @@ function Section({
   return (
     <div
       style={{
-        marginTop: first ? 12 : 14,
-        paddingTop: first ? 0 : 12,
+        marginTop: first ? 10 : 11,
+        paddingTop: first ? 0 : 10,
         borderTop: first ? "none" : `1px solid ${UI.hairline}`,
       }}
     >
@@ -804,13 +804,13 @@ function InfoPanel({
         position: "absolute",
         top: 14,
         left: 14,
-        width: 304,
+        width: 324,
         // Cap to the viewport and scroll internally so the tall spectral-index
         // panel fits on screen instead of spilling past the bottom edge.
         maxHeight: "calc(100vh - 28px)",
         overflowY: "auto",
         padding: "14px 16px 12px",
-        background: "linear-gradient(180deg, rgba(15,19,25,0.9), rgba(10,13,18,0.86))",
+        background: "linear-gradient(180deg, rgba(15,19,25,0.82), rgba(10,13,18,0.78))",
         backdropFilter: "blur(14px)",
         WebkitBackdropFilter: "blur(14px)",
         border: `1px solid ${UI.hairline}`,
@@ -1096,17 +1096,6 @@ function InfoPanel({
                 </Toggle>
               </div>
               <ColormapBar name={ndviColormap} reversed={ndviReversed} />
-              <div
-                style={{
-                  marginTop: 8,
-                  fontSize: 11,
-                  lineHeight: 1.5,
-                  color: UI.faint,
-                }}
-              >
-                Earth Genome public S2 bands. Satellogic imagery needs its own
-                band/asset conventions + auth.
-              </div>
             </>
           )}
         </div>
@@ -1179,15 +1168,15 @@ function InfoPanel({
         </Section>
       )}
 
-      {/* Footer: troubleshooting hint + provenance */}
+      {/* Footer: provenance */}
       <div
         style={{
-          marginTop: 14,
-          paddingTop: 11,
+          marginTop: 10,
+          paddingTop: 9,
           borderTop: `1px solid ${UI.hairline}`,
           fontFamily: UI.mono,
           fontSize: 11,
-          lineHeight: 1.6,
+          lineHeight: 1.45,
         }}
       >
         <div style={{ color: UI.faint }}>
@@ -1196,10 +1185,7 @@ function InfoPanel({
           <span style={{ color: UI.mute }}>L</span> labels&nbsp;&nbsp;
           <span style={{ color: UI.mute }}>D</span> draw
         </div>
-        <div style={{ color: UI.faint, marginTop: 4 }}>
-          Stale or blank? Hard-reload (⌘⇧R / Ctrl+Shift+R).
-        </div>
-        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 12 }}>
           <a
             href="https://github.com/kentstephen/sentinel-2-cog-deckgl-raster"
             target="_blank"
@@ -1219,7 +1205,7 @@ function InfoPanel({
             View source
           </a>
         </div>
-        <div style={{ color: UI.faint, marginTop: 5 }}>
+        <div style={{ color: UI.faint, marginTop: 4 }}>
           Data:{" "}
           <a
             href="https://source.coop/earthgenome/sentinel2-temporal-mosaics"
@@ -1250,7 +1236,7 @@ function InfoPanel({
             Source Coop
           </a>
         </div>
-        <div style={{ color: UI.faint, marginTop: 5 }}>
+        <div style={{ color: UI.faint, marginTop: 4 }}>
           Built with{" "}
           <a
             href="https://developmentseed.org/deck.gl-raster/"
