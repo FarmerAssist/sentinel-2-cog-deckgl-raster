@@ -89,6 +89,9 @@ const DEFAULT_YEAR = 2023;
 // Yuma, AZ + margin (lower Colorado River irrigated ag vs Sonoran desert;
 // ~32 CORS-open items in 2023)
 const STAC_BBOX: [number, number, number, number] = [-115.5, 31.5, -113.0, 33.5];
+// Ceiling for the "fetch viewport" AOI span (deg/axis) so a zoomed-out view
+// can't enumerate thousands of COGs. Matches geocode.ts's maxSpanDeg.
+const MAX_VIEWPORT_SPAN_DEG = 3.0;
 
 // Items are ANNUAL composites (`YYYY-01-01_YYYY+1-01-01`). A full-year query
 // also matches the adjacent years' annuals at the Jan-1 boundary, so a tile can
@@ -181,11 +184,6 @@ export default function App() {
   // handler). `/` focuses search, `m` marker, `l` labels, `d` draw AOI.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Escape cancels the draw-AOI gesture from anywhere (no-op otherwise).
-      if (e.key === "Escape") {
-        setDrawing(false);
-        return;
-      }
       const t = e.target as HTMLElement | null;
       const typing =
         !!t &&
@@ -300,6 +298,32 @@ export default function App() {
     setBbox(bb);
     setMarker(null);
     setDrawing(false);
+  };
+
+  // "Fetch viewport": set the STAC AOI to whatever's currently in view, with a
+  // small buffer so items overlapping the edges are included. Span is clamped
+  // (MAX_VIEWPORT_SPAN_DEG) so a zoomed-out view can't fan out into thousands of
+  // COG opens. Drives the same debounced /search as draw/geocode.
+  const handleFetchViewport = () => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    const b = map.getBounds();
+    let w = b.getWest();
+    let s = b.getSouth();
+    let e = b.getEast();
+    let n = b.getNorth();
+    const margin = 0.1; // 10% buffer beyond the visible edges
+    const dw = (e - w) * margin;
+    const dh = (n - s) * margin;
+    w -= dw; e += dw; s -= dh; n += dh;
+    // Clamp each axis span to the ceiling, keeping the viewport center.
+    const cx = (w + e) / 2;
+    const cy = (s + n) / 2;
+    const maxHalf = MAX_VIEWPORT_SPAN_DEG / 2;
+    const halfW = Math.min((e - w) / 2, maxHalf);
+    const halfH = Math.min((n - s) / 2, maxHalf);
+    setMarker(null);
+    setBbox([cx - halfW, cy - halfH, cx + halfW, cy + halfH]);
   };
 
   // Snap the map back to plan view: bearing → north, pitch → flat.
@@ -519,6 +543,7 @@ export default function App() {
         onToggleMarker={() => setShowMarker((v) => !v)}
         drawing={drawing}
         onToggleDraw={() => setDrawing((v) => !v)}
+        onFetchViewport={handleFetchViewport}
         onResetNorth={handleResetNorth}
         zoom={zoom}
         smoothing={smoothing}
@@ -695,6 +720,7 @@ function InfoPanel({
   onToggleMarker,
   drawing,
   onToggleDraw,
+  onFetchViewport,
   onResetNorth,
   zoom,
   smoothing,
@@ -727,6 +753,7 @@ function InfoPanel({
   onToggleMarker: () => void;
   drawing: boolean;
   onToggleDraw: () => void;
+  onFetchViewport: () => void;
   onResetNorth: () => void;
   zoom: number;
   smoothing: boolean;
@@ -778,6 +805,10 @@ function InfoPanel({
         top: 14,
         left: 14,
         width: 304,
+        // Cap to the viewport and scroll internally so the tall spectral-index
+        // panel fits on screen instead of spilling past the bottom edge.
+        maxHeight: "calc(100vh - 28px)",
+        overflowY: "auto",
         padding: "14px 16px 12px",
         background: "linear-gradient(180deg, rgba(15,19,25,0.9), rgba(10,13,18,0.86))",
         backdropFilter: "blur(14px)",
@@ -868,6 +899,13 @@ function InfoPanel({
             title="Drag a rectangle on the map to set the area of interest"
           >
             {drawing ? "DRAW: DRAG BOX" : "DRAW AOI"}
+          </Toggle>
+          <Toggle
+            active={false}
+            onClick={onFetchViewport}
+            title="Load imagery for the current map view (with a small buffer)"
+          >
+            FETCH VIEW
           </Toggle>
           <Toggle active={labels} onClick={() => onLabelsChange(!labels)}>
             LABELS {labels ? "ON" : "OFF"}
@@ -963,7 +1001,7 @@ function InfoPanel({
                   SMOOTH {smoothing ? "ON" : "OFF"}
                 </Toggle>
                 <span style={{ fontFamily: UI.mono, fontSize: 10.5, color: UI.faint }}>
-                  when zoomed in
+                  (when zoomed in)
                 </span>
               </div>
             </>
