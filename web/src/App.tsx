@@ -159,7 +159,7 @@ export default function App() {
   const [labels, setLabels] = useState(false);
   const [bbox, setBbox] = useState<[number, number, number, number]>(STAC_BBOX);
   const [marker, setMarker] = useState<{ lng: number; lat: number; label: string } | null>(null);
-  const [showMarker, setShowMarker] = useState(true);
+  const [showMarker, setShowMarker] = useState(false);
   const [drawing, setDrawing] = useState(false);
   const [stats, setStats] = useState<LoadStats>({ loaded: 0, failed: 0, failures: [] });
   // Live map zoom, mirrored for the on-panel readout (diagnostic).
@@ -181,6 +181,11 @@ export default function App() {
   // handler). `/` focuses search, `m` marker, `l` labels, `d` draw AOI.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Escape cancels the draw-AOI gesture from anywhere (no-op otherwise).
+      if (e.key === "Escape") {
+        setDrawing(false);
+        return;
+      }
       const t = e.target as HTMLElement | null;
       const typing =
         !!t &&
@@ -305,8 +310,10 @@ export default function App() {
   const handlePickPlace = (r: GeoResult) => {
     const bb = resultToBbox(r);
     setBbox(bb);
+    // Marker exists after a geocode but stays HIDDEN — the user reveals it via
+    // SHOW MARKER / `M`. Do not auto-show on search.
     setMarker({ lng: r.center[0], lat: r.center[1], label: r.label });
-    setShowMarker(true);
+    setShowMarker(false);
     mapRef.current?.fitBounds(
       [
         [bb[0], bb[1]],
@@ -874,7 +881,7 @@ function InfoPanel({
           </Toggle>
           {hasMarker && (
             <Toggle active={showMarker} onClick={onToggleMarker}>
-              MARKER {showMarker ? "ON" : "OFF"}
+              {showMarker ? "HIDE MARKER" : "SHOW MARKER"}
             </Toggle>
           )}
         </div>
@@ -956,7 +963,7 @@ function InfoPanel({
                   SMOOTH {smoothing ? "ON" : "OFF"}
                 </Toggle>
                 <span style={{ fontFamily: UI.mono, fontSize: 10.5, color: UI.faint }}>
-                  for high zoom
+                  when zoomed in
                 </span>
               </div>
             </>

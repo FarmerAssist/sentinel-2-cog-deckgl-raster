@@ -57,6 +57,15 @@ enabler for big-AOI loads:
   only streams tiles for visible items, so this caps how many sources are open
   at once.
 
+### "Clip" button for spectral index range
+
+Today the index range slider only *rescales* the colormap — values outside
+`[lo, hi]` clamp to the ramp ends and still paint. A clip toggle would instead
+**discard** out-of-range pixels (let the basemap show through), turning the
+range into a true mask rather than a stretch. Likely a small shader change:
+`discard` when the normalized-difference value falls outside the rescale window,
+alongside the existing `discardBoundlessPadding`. Not started.
+
 ### Layering two indices (NDVI + NDWI)
 
 Showing vegetation and water together in one view. Both indices are all-10 m and

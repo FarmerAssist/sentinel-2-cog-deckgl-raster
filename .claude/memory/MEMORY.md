@@ -205,6 +205,46 @@ shortcuts), `docs/SPECTRAL_INDICES.md` (catalog roadmap). README/CLAUDE refreshe
 **Open:** user still to confirm the latest on real hardware before push;
 viewport-driven STAC fetch + embeddings sub-project still deferred (see plan).
 
+## Session 2026-05-20/21 (colormaps, UX, pixelation diagnosis)
+
+- **CARTO colormaps** (`cartoColormaps.ts`): Emrld/Earth/Geyser/Sunset injected as
+  extra rows on the shipped sprite texture (interpolated 256-px stripes appended
+  via `appendCartoColormaps`; `App` builds the merged texture + name→row map and
+  resolves `colormapIndex` through it; `ColormapBar` draws CARTO ramps from stops
+  since they're not in the PNG). Dropped the red-green ramps `rdylgn`/`spectral`
+  (deuteranopia). Index list: cividis/viridis/plasma/rdbu/emrld/earth/geyser/sunset.
+- **Color prefs persist** (`prefs.ts` → localStorage `s2cog.colorPrefs.v1`): rgbGain,
+  colormap, range, scale, reversed, smoothing. Validates/falls back (stale colormap
+  names can't break UI). Nav state (AOI/year/mode) intentionally NOT persisted.
+- **Pixelation diagnosis (RESOLVED — not a bug).** TCI is native 10 m. LOD selector
+  refines to the full-res image (`geotiff-tileset.js` appends `geotiff` as finest
+  level); confirmed via on-panel zoom·dpr readout + screenshots. Crossover where a
+  10 m pixel exceeds one device pixel ≈ **zoom 12.5** at mid-latitudes; past that
+  you're magnifying real data, so blocks are the data ceiling. Blockiness is also
+  content-dependent: flat farmland hides it, forest/shoreline edges expose it.
+  - **SMOOTH toggle** (RGB card): `getTileData` takes a `nearest`|`linear` filter;
+    toggle baked into COGLayer id so tiles rebuild. linear = smooth magnification
+    (interpolation, no added detail). User likes it for high zoom. Hint: "when
+    zoomed in". `zoom · dpr` readout left in the panel.
+- **Marker** is HIDDEN by default and NOT auto-shown on geocode — user reveals it via
+  `SHOW MARKER`/`HIDE MARKER` button (relabeled from MARKER ON/OFF) or `M`.
+  `handlePickPlace` sets the marker but `setShowMarker(false)`.
+- **NORTH ↑** button: `easeTo({bearing:0,pitch:0})`. **Escape** cancels draw-AOI only
+  (global Esc handler was removed earlier, re-added scoped to draw).
+- **Footer attribution**: dataset (source.coop) + Earth Genome links; only the
+  dataset title is accent, rest muted (avoid link soup). README hero = Salton Sea
+  NDVI (`docs/hero.webp`, compressed webp). README "Using this with other datasets"
+  section + Dev Seed example links. Fixed 404s: the `@developmentseed/*` packages
+  live in the `deck.gl-raster` monorepo `packages/`, `@chunkd` is `blacha/chunkd`.
+
+### Deferred ideas (noted, NOT built)
+- `docs/INDEX_LAYERING.md` — NDVI+NDWI together (channel-split / masked / 2D LUT).
+- ROADMAP — "clip" button: `discard` out-of-range index pixels (true mask vs clamp).
+- **False color** (e.g. B08/B04/B03): would need raw multi-band composite, which is
+  the separate-band-COG path that SEAMS (see `docs/SEAMS.md`) — TCI avoids seams by
+  being precomposed, NDVI by being a ratio. So "false color *and* seamless" is a real
+  tension; no false-color asset published by Earth Genome. Discussion only.
+
 ## Conduct
 
 Inherits global `~/CLAUDE.md`. No flattery, no unsolicited critique,
