@@ -14,6 +14,7 @@ import type { GeoTIFF } from "@developmentseed/geotiff";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import type { Device, Texture } from "@luma.gl/core";
 import "maplibre-gl/dist/maplibre-gl.css";
+import * as RadixSlider from "@radix-ui/react-slider";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Map as MaplibreMap,
@@ -656,6 +657,56 @@ const selectStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
+/** Dual-thumb range slider built on Radix Slider primitive. The Radix root
+ *  owns both thumbs and a single track, so the two thumbs never compete for
+ *  hit-testing or repaint order the way two stacked <input type="range"> do. */
+function RangeSlider({
+  value,
+  min,
+  max,
+  step = 0.05,
+  minGap = 0.05,
+  onChange,
+  onResetLow,
+  onResetHigh,
+}: {
+  value: [number, number];
+  min: number;
+  max: number;
+  step?: number;
+  minGap?: number;
+  onChange: (v: [number, number]) => void;
+  onResetLow?: () => void;
+  onResetHigh?: () => void;
+}) {
+  const minStepsBetweenThumbs = Math.max(1, Math.round(minGap / step));
+  return (
+    <RadixSlider.Root
+      className="range-slider-root"
+      value={value}
+      min={min}
+      max={max}
+      step={step}
+      minStepsBetweenThumbs={minStepsBetweenThumbs}
+      onValueChange={(v) => onChange([v[0], v[1]] as [number, number])}
+    >
+      <RadixSlider.Track className="range-slider-track">
+        <RadixSlider.Range className="range-slider-range" />
+      </RadixSlider.Track>
+      <RadixSlider.Thumb
+        className="range-slider-thumb"
+        onDoubleClick={onResetLow}
+        aria-label="range minimum"
+      />
+      <RadixSlider.Thumb
+        className="range-slider-thumb"
+        onDoubleClick={onResetHigh}
+        aria-label="range maximum"
+      />
+    </RadixSlider.Root>
+  );
+}
+
 /** Labelled slider with an editable NumBox header. */
 function Slider({
   label,
@@ -1044,31 +1095,14 @@ function InfoPanel({
                     />
                   </span>
                 </div>
-                <input
-                  type="range"
+                <RangeSlider
+                  value={ndviRange}
                   min={-1}
                   max={1}
                   step={0.05}
-                  value={ndviRange[0]}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    onNdviRangeChange([Math.min(v, ndviRange[1] - 0.05), ndviRange[1]]);
-                  }}
-                  onDoubleClick={() => onNdviRangeChange([DEFAULT_NDVI_RANGE[0], ndviRange[1]])}
-                  style={{ width: "100%", marginTop: 4, accentColor: UI.accent }}
-                />
-                <input
-                  type="range"
-                  min={-1}
-                  max={1}
-                  step={0.05}
-                  value={ndviRange[1]}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    onNdviRangeChange([ndviRange[0], Math.max(v, ndviRange[0] + 0.05)]);
-                  }}
-                  onDoubleClick={() => onNdviRangeChange([ndviRange[0], DEFAULT_NDVI_RANGE[1]])}
-                  style={{ width: "100%", accentColor: UI.accent }}
+                  onChange={onNdviRangeChange}
+                  onResetLow={() => onNdviRangeChange([DEFAULT_NDVI_RANGE[0], ndviRange[1]])}
+                  onResetHigh={() => onNdviRangeChange([ndviRange[0], DEFAULT_NDVI_RANGE[1]])}
                 />
               </div>
               <Slider

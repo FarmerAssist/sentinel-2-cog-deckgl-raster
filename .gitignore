@@ -17,3 +17,6 @@ web/src/minimal_stac.json
 # Scratch research / handoff notes (not for the repo)
 .claude/memory/TERRAIN_RESEARCH.md
 .claude/memory/TERRAIN_HANDOFF.md
+
+# Ad-hoc DuckDB scans of source.coop (scratch)
+scan_source_coop.sql
