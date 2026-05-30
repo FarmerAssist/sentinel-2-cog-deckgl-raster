@@ -1,6 +1,6 @@
 # Sentinel-2 Sandbox with deck.gl-raster
 
-![NDVI over the Salton Sea and Imperial Valley, rendered browser-side from Sentinel-2 COGs with an Emrld colormap](./docs/hero.webp)
+<img src="./docs/hero.webp" alt="NDVI over the Salton Sea and Imperial Valley, rendered browser-side from Sentinel-2 COGs with an Emrld colormap" width="100%" />
 
 <sub>NDVI over the Salton Sea and California's Imperial Valley — irrigated fields glowing against the desert, rendered live in the browser from per-tile Sentinel-2 COGs (Emrld colormap).</sub>
 
